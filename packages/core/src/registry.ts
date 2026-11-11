@@ -5,6 +5,8 @@ import type { RuntimeAdapter } from "./runtime.ts";
 import type { Approval, Run, RunEvent } from "./schemas.ts";
 import type { Store } from "./store.ts";
 import type { TriggerHub } from "./triggers.ts";
+import type { MockJira } from "./jira.ts";
+import type { WorkHub } from "./work.ts";
 
 /** Who is calling. Every capability call is attributed and audited. */
 export interface Actor {
@@ -18,7 +20,7 @@ export interface BusEvents {
     event: [event: RunEvent];
     approval: [approval: Approval];
     /** Coarse "something in this collection changed" signal for live UIs. */
-    change: [entity: "agents" | "triggers" | "audit"];
+    change: [entity: "agents" | "triggers" | "audit" | "work"];
 }
 export class Bus extends EventEmitter<BusEvents> {
     constructor() {
@@ -32,6 +34,8 @@ export interface Services {
     bus: Bus;
     engine: Engine;
     triggers: TriggerHub;
+    work: WorkHub;
+    mockJira: MockJira;
     runtimes: Record<string, RuntimeAdapter>;
     registry: Registry;
     info: { version: string; dataDir: string; baseUrl: string; startedAt: string };

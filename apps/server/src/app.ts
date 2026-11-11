@@ -68,6 +68,26 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
         return result.fired ? reply.code(202).send({ accepted: true, runId: result.run.id }) : reply.code(409).send({ accepted: false, reason: result.reason });
     });
 
+    // ── Mock Jira: the REST shapes of Jira Cloud, backed by memory ─────────
+    const { mockJira } = foreman;
+    app.get<{ Querystring: { jql?: string; maxResults?: string } }>("/mock/jira/rest/api/3/search/jql", async (req) => {
+        const issues = mockJira.search(req.query.jql ?? "").slice(0, Number(req.query.maxResults ?? 50) || 50);
+        return { issues, isLast: true };
+    });
+    app.get<{ Params: { key: string } }>("/mock/jira/rest/api/3/issue/:key", async (req, reply) => mockJira.get(req.params.key) ?? reply.code(404).send({ errorMessages: ["Issue does not exist"] }));
+    app.get<{ Params: { key: string } }>("/mock/jira/browse/:key", async (req, reply) => {
+        const issue = mockJira.get(req.params.key);
+        if (!issue) return reply.code(404).type("text/plain").send("No such mock ticket");
+        const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+        const f = issue.fields;
+        return reply.type("text/html").send(
+            `<!doctype html><meta charset="utf-8"><title>${esc(issue.key)} · Mock Jira</title><body style="font:15px/1.5 system-ui;max-width:680px;margin:48px auto;padding:0 20px;color:#16202b">
+<p style="color:#74818e;font-size:13px">Mock Jira · ${esc(f.project.key)} · ${esc(f.issuetype.name)} · ${esc(f.priority.name)} · ${esc(f.status.name)}</p>
+<h1 style="font-size:22px;margin:4px 0 16px">${esc(issue.key)} ${esc(f.summary)}</h1><p>${esc(f.description)}</p>
+<p style="color:#74818e;font-size:13px">Labels: ${esc(f.labels.join(", ") || "none")}</p></body>`,
+        );
+    });
+
     // ── MCP over Streamable HTTP (stateless: one server per request) ──────
     app.post("/mcp", async (req, reply) => {
         const client = String(req.headers["x-foreman-client"] ?? req.headers["user-agent"] ?? "client").slice(0, 60);
@@ -90,7 +110,7 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
     const webDist = resolve(fileURLToPath(import.meta.url), "../../../web/dist");
     if (existsSync(webDist)) {
         await app.register(fastifyStatic, { root: webDist });
-        app.setNotFoundHandler((req, reply) => (req.method === "GET" && !/^\/(api|mcp|hooks)\b/.test(req.url) ? reply.sendFile("index.html") : reply.code(404).send({ error: "Not found" })));
+        app.setNotFoundHandler((req, reply) => (req.method === "GET" && !/^\/(api|mcp|hooks|mock)\b/.test(req.url) ? reply.sendFile("index.html") : reply.code(404).send({ error: "Not found" })));
     }
 
     return { app, foreman };

@@ -7,6 +7,11 @@ import {
     type Approval,
     type AuditEntry,
     type Revision,
+    type RoutingMatch,
+    type RoutingRule,
+    type Ticket,
+    type WorkItem,
+    type WorkState,
     type Run,
     type RunEvent,
     type RunSource,
@@ -50,6 +55,19 @@ CREATE TABLE IF NOT EXISTS triggers (
   config TEXT NOT NULL, prompt_template TEXT NOT NULL, secret TEXT NOT NULL,
   last_fired_at TEXT, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS work_items (
+  id TEXT PRIMARY KEY, source TEXT NOT NULL, key TEXT NOT NULL, ticket TEXT NOT NULL, state TEXT NOT NULL,
+  agent_id TEXT, rule_id TEXT, review INTEGER NOT NULL DEFAULT 0, held INTEGER NOT NULL DEFAULT 0, rank REAL NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0, run_id TEXT, progress TEXT, note TEXT,
+  received_at TEXT NOT NULL, queued_at TEXT, started_at TEXT, finished_at TEXT,
+  UNIQUE (source, key)
+);
+CREATE INDEX IF NOT EXISTS work_state ON work_items (state, rank);
+CREATE TABLE IF NOT EXISTS routing_rules (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL,
+  match TEXT NOT NULL, agent_id TEXT NOT NULL, review INTEGER NOT NULL DEFAULT 0, prompt_template TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, actor TEXT NOT NULL, capability TEXT NOT NULL,
   input TEXT NOT NULL, ok INTEGER NOT NULL, error TEXT
@@ -120,6 +138,36 @@ const toTrigger = (r: Row): Trigger => ({
     promptTemplate: r.prompt_template,
     secret: r.secret,
     lastFiredAt: r.last_fired_at,
+    createdAt: r.created_at,
+});
+
+const toWorkItem = (r: Row): WorkItem => ({
+    id: r.id,
+    ticket: JSON.parse(r.ticket),
+    state: r.state,
+    agentId: r.agent_id,
+    ruleId: r.rule_id,
+    review: !!r.review,
+    held: !!r.held,
+    rank: r.rank,
+    attempts: r.attempts,
+    runId: r.run_id,
+    progress: r.progress ? JSON.parse(r.progress) : null,
+    note: r.note,
+    receivedAt: r.received_at,
+    queuedAt: r.queued_at,
+    startedAt: r.started_at,
+    finishedAt: r.finished_at,
+});
+const toRule = (r: Row): RoutingRule => ({
+    id: r.id,
+    name: r.name,
+    enabled: !!r.enabled,
+    position: r.position,
+    match: JSON.parse(r.match),
+    agentId: r.agent_id,
+    review: !!r.review,
+    promptTemplate: r.prompt_template,
     createdAt: r.created_at,
 });
 
@@ -355,6 +403,141 @@ export class Store {
             ok: !!r.ok,
             error: r.error,
         }));
+    }
+
+    // ── work items ────────────────────────────────────────────────────────
+    createWorkItem(input: { ticket: Ticket; state: WorkState; agentId: string | null; ruleId: string | null; review: boolean; rank: number }): WorkItem {
+        const itemId = id("wrk");
+        const ts = now();
+        this.run(
+            "INSERT INTO work_items (id, source, key, ticket, state, agent_id, rule_id, review, rank, received_at, queued_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            itemId,
+            input.ticket.source,
+            input.ticket.key,
+            json(input.ticket),
+            input.state,
+            input.agentId,
+            input.ruleId,
+            input.review ? 1 : 0,
+            input.rank,
+            ts,
+            input.state === "queued" ? ts : null,
+        );
+        return this.getWorkItem(itemId)!;
+    }
+    getWorkItem(itemId: string): WorkItem | undefined {
+        const r = this.one("SELECT * FROM work_items WHERE id = ?", itemId);
+        return r && toWorkItem(r);
+    }
+    findWorkItem(source: string, key: string): WorkItem | undefined {
+        const r = this.one("SELECT * FROM work_items WHERE source = ? AND key = ? COLLATE NOCASE", source, key);
+        return r && toWorkItem(r);
+    }
+    findWorkItemByRun(runId: string): WorkItem | undefined {
+        const r = this.one("SELECT * FROM work_items WHERE run_id = ?", runId);
+        return r && toWorkItem(r);
+    }
+    listWorkItems(filter: { states?: WorkState[]; agentId?: string; project?: string; finishedSince?: string; limit?: number } = {}): WorkItem[] {
+        const where: string[] = [];
+        const params: any[] = [];
+        if (filter.states?.length) (where.push(`state IN (${filter.states.map(() => "?").join(",")})`), params.push(...filter.states));
+        if (filter.agentId) (where.push("agent_id = ?"), params.push(filter.agentId));
+        if (filter.project) (where.push("json_extract(ticket, '$.project') = ? COLLATE NOCASE"), params.push(filter.project));
+        if (filter.finishedSince) (where.push("(finished_at IS NULL OR finished_at >= ?)"), params.push(filter.finishedSince));
+        params.push(Math.min(filter.limit ?? 500, 2000));
+        return this.all(`SELECT * FROM work_items ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY rank, received_at LIMIT ?`, ...params).map(toWorkItem);
+    }
+    updateWorkItem(
+        itemId: string,
+        patch: Partial<Pick<WorkItem, "ticket" | "state" | "agentId" | "ruleId" | "review" | "held" | "rank" | "attempts" | "runId" | "progress" | "note" | "queuedAt" | "startedAt" | "finishedAt">>,
+    ): WorkItem {
+        const map: Record<string, string> = {
+            ticket: "ticket",
+            state: "state",
+            agentId: "agent_id",
+            ruleId: "rule_id",
+            review: "review",
+            held: "held",
+            rank: "rank",
+            attempts: "attempts",
+            runId: "run_id",
+            progress: "progress",
+            note: "note",
+            queuedAt: "queued_at",
+            startedAt: "started_at",
+            finishedAt: "finished_at",
+        };
+        const sets: string[] = [];
+        const params: any[] = [];
+        for (const [k, v] of Object.entries(patch)) {
+            if (v === undefined) continue;
+            sets.push(`${map[k]} = ?`);
+            params.push(k === "ticket" || (k === "progress" && v !== null) ? json(v) : typeof v === "boolean" ? (v ? 1 : 0) : v);
+        }
+        if (sets.length) this.run(`UPDATE work_items SET ${sets.join(", ")} WHERE id = ?`, ...params, itemId);
+        return this.getWorkItem(itemId)!;
+    }
+    rankBounds(): { min: number; max: number } {
+        const r = this.one("SELECT COALESCE(MIN(rank), 0) AS min, COALESCE(MAX(rank), 0) AS max FROM work_items WHERE state IN ('queued','inbox')")!;
+        return { min: r.min, max: r.max };
+    }
+    listRunsForWorkItem(itemId: string): Run[] {
+        return this.all("SELECT * FROM runs WHERE json_extract(source, '$.workItemId') = ? ORDER BY created_at DESC, rowid DESC", itemId).map(toRun);
+    }
+
+    // ── routing rules ─────────────────────────────────────────────────────
+    listRules(): RoutingRule[] {
+        return this.all("SELECT * FROM routing_rules ORDER BY position, created_at").map(toRule);
+    }
+    getRule(ruleId: string): RoutingRule | undefined {
+        const r = this.one("SELECT * FROM routing_rules WHERE id = ?", ruleId);
+        return r && toRule(r);
+    }
+    createRule(input: { name: string; match: RoutingMatch; agentId: string; review: boolean; promptTemplate: string; enabled: boolean }): RoutingRule {
+        const ruleId = id("rul");
+        const position = (this.one("SELECT COALESCE(MAX(position), 0) + 1 AS n FROM routing_rules")!.n as number) ?? 1;
+        this.run(
+            "INSERT INTO routing_rules (id, name, enabled, position, match, agent_id, review, prompt_template, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            ruleId,
+            input.name,
+            input.enabled ? 1 : 0,
+            position,
+            json(input.match),
+            input.agentId,
+            input.review ? 1 : 0,
+            input.promptTemplate,
+            now(),
+        );
+        return this.getRule(ruleId)!;
+    }
+    updateRule(ruleId: string, patch: Partial<Pick<RoutingRule, "name" | "enabled" | "position" | "match" | "agentId" | "review" | "promptTemplate">>): RoutingRule {
+        const r = this.getRule(ruleId);
+        if (!r) throw new Error(`Rule ${ruleId} not found`);
+        const n = { ...r, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)) };
+        this.run(
+            "UPDATE routing_rules SET name = ?, enabled = ?, position = ?, match = ?, agent_id = ?, review = ?, prompt_template = ? WHERE id = ?",
+            n.name,
+            n.enabled ? 1 : 0,
+            n.position,
+            json(n.match),
+            n.agentId,
+            n.review ? 1 : 0,
+            n.promptTemplate,
+            ruleId,
+        );
+        return this.getRule(ruleId)!;
+    }
+    deleteRule(ruleId: string) {
+        this.run("DELETE FROM routing_rules WHERE id = ?", ruleId);
+    }
+
+    // ── settings ──────────────────────────────────────────────────────────
+    getSetting<T>(key: string): T | undefined {
+        const r = this.one("SELECT value FROM settings WHERE key = ?", key);
+        return r ? (JSON.parse(r.value) as T) : undefined;
+    }
+    setSetting(key: string, value: unknown) {
+        this.run("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", key, json(value));
     }
 
     // ── insights ──────────────────────────────────────────────────────────

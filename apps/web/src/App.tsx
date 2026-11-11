@@ -5,10 +5,12 @@ import { Connect } from "./pages/Connect.tsx";
 import { Home } from "./pages/Home.tsx";
 import { Activity, Agents, Approvals, Runs } from "./pages/Lists.tsx";
 import { RunDetail } from "./pages/RunDetail.tsx";
+import { Work } from "./pages/Work.tsx";
 import { Lamp, Modal, ToastProvider } from "./ui.tsx";
 
 const NAV = [
     { path: "/", label: "Board", match: "" },
+    { path: "/work", label: "Work", match: "work" },
     { path: "/agents", label: "Agents", match: "agents" },
     { path: "/runs", label: "Runs", match: "runs" },
     { path: "/approvals", label: "Approvals", match: "approvals" },
@@ -21,6 +23,8 @@ function Page({ route }: { route: string[] }) {
     switch (section) {
         case undefined:
             return <Home />;
+        case "work":
+            return <Work itemId={id} />;
         case "agents":
             return id === "new" ? <NewAgent /> : id ? <AgentStudio key={id} agentId={id} /> : <Agents />;
         case "runs":

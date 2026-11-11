@@ -118,7 +118,7 @@ export interface Query<T> {
 
 /**
  * Read a capability and keep it fresh: refetches whenever one of `topics` is published by the
- * server. Topics: `run`, `run:<id>`, `approval`, `agents`, `triggers`, `audit`.
+ * server. Topics: `run`, `run:<id>`, `approval`, `agents`, `triggers`, `audit`, `work`.
  */
 export function useRpc<T = any>(name: string | null, input: unknown = {}, topics: string[] = []): Query<T> {
     const [state, setState] = useState<{ data?: T; error: string | null; loading: boolean }>({ error: null, loading: !!name });

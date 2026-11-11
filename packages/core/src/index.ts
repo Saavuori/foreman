@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { agentCapabilities } from "./capabilities/agents.ts";
 import { opsCapabilities } from "./capabilities/ops.ts";
 import { runCapabilities } from "./capabilities/runs.ts";
+import { workCapabilities } from "./capabilities/work.ts";
+import { MockJira } from "./jira.ts";
+import { WorkHub } from "./work.ts";
 import { Engine } from "./engine.ts";
 import { Bus, Registry, type Services } from "./registry.ts";
 import { SimulatedRuntime } from "./mock.ts";
@@ -18,6 +21,8 @@ export * from "./mock.ts";
 export * from "./timeline.ts";
 export { renderPrompt, TriggerHub } from "./triggers.ts";
 export { Engine } from "./engine.ts";
+export { JiraClient, MockJira, plainText, toTicket } from "./jira.ts";
+export { WorkHub, defaultRank, ruleMatches } from "./work.ts";
 export { Store } from "./store.ts";
 
 export interface ForemanOptions {
@@ -40,18 +45,23 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
     for (const runtime of options.runtimes ?? []) runtimes[runtime.name] = runtime;
     const engine = new Engine(store, bus, runtimes, { concurrency: options.concurrency ?? 4 });
     const triggers = new TriggerHub(store, engine, bus);
+    const mockJira = new MockJira();
+    const work = new WorkHub(store, engine, bus, { mockJiraUrl: `${options.baseUrl}/mock/jira` });
     const registry = new Registry();
-    registry.register(...agentCapabilities, ...runCapabilities, ...opsCapabilities);
-    const services: Services = { store, bus, engine, triggers, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
+    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...opsCapabilities);
+    const services: Services = { store, bus, engine, triggers, work, mockJira, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
     registry.bind(services);
     return {
         ...services,
         start() {
             engine.recover();
             triggers.start();
+            work.start();
         },
         async stop() {
             triggers.stop();
+            work.stop();
+            mockJira.setGenerator(0);
             await Promise.all(Object.values(runtimes).map((r) => r.dispose?.()));
             store.close();
         },

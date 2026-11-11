@@ -119,7 +119,9 @@ export type RunUsage = z.infer<typeof RunUsage>;
 export const emptyUsage = (): RunUsage => ({ inputTokens: 0, outputTokens: 0, credits: 0, modelCalls: 0, toolCalls: 0 });
 
 export const RunSource = z.object({
-    kind: z.enum(["manual", "mcp", "schedule", "webhook", "replay", "agent"]),
+    kind: z.enum(["manual", "mcp", "schedule", "webhook", "replay", "agent", "work"]),
+    /** Set when the run is an attempt at a work item (a ticket). */
+    workItemId: z.string().optional(),
     triggerId: z.string().optional(),
     replayOf: z.string().optional(),
     actor: z.string().optional(),
@@ -210,3 +212,93 @@ export const AuditEntry = z.object({
     error: z.string().nullable(),
 });
 export type AuditEntry = z.infer<typeof AuditEntry>;
+
+// ── Work queue ─────────────────────────────────────────────────────────────
+
+/** A ticket as Foreman sees it, whatever system it came from. */
+export const Ticket = z.object({
+    source: z.literal("jira").default("jira"),
+    key: z.string(),
+    url: z.string(),
+    title: z.string(),
+    description: z.string().default(""),
+    type: z.string().default("Task"),
+    priority: z.string().default("Medium"),
+    labels: z.array(z.string()).default([]),
+    project: z.string(),
+    reporter: z.string().nullable().default(null),
+    status: z.string().default("To Do"),
+    updatedAt: z.string(),
+});
+export type Ticket = z.infer<typeof Ticket>;
+
+export const WorkState = z.enum(["inbox", "queued", "working", "needs_you", "review", "done", "failed", "skipped"]);
+export type WorkState = z.infer<typeof WorkState>;
+export const ACTIVE_WORK_STATES: WorkState[] = ["working", "needs_you"];
+
+export const WorkItem = z.object({
+    id: z.string(),
+    ticket: Ticket,
+    state: WorkState,
+    agentId: z.string().nullable(),
+    ruleId: z.string().nullable(),
+    /** Stop in "review" for a human check instead of going straight to done. */
+    review: z.boolean(),
+    /** A held item keeps its place in the queue but is not started. */
+    held: z.boolean(),
+    /** Queue order, lowest first. Defaults to priority then arrival; changes when someone reorders. */
+    rank: z.number(),
+    attempts: z.number().int(),
+    /** The current or most recent attempt. */
+    runId: z.string().nullable(),
+    progress: z.object({ step: z.number(), total: z.number(), message: z.string() }).nullable(),
+    /** Why it is waiting or why it failed, in one line. */
+    note: z.string().nullable(),
+    receivedAt: z.string(),
+    queuedAt: z.string().nullable(),
+    startedAt: z.string().nullable(),
+    finishedAt: z.string().nullable(),
+});
+export type WorkItem = z.infer<typeof WorkItem>;
+
+export const RoutingMatch = z.object({
+    project: z.string().optional().describe("Jira project key, e.g. PAY"),
+    type: z.string().optional().describe("Issue type, e.g. Bug"),
+    label: z.string().optional().describe("A label the ticket must carry"),
+    priority: z.string().optional().describe("Priority name, e.g. High"),
+});
+export type RoutingMatch = z.infer<typeof RoutingMatch>;
+
+export const RoutingRule = z.object({
+    id: z.string(),
+    name: z.string(),
+    enabled: z.boolean(),
+    /** Rules are tried in this order; the first match wins. */
+    position: z.number().int(),
+    match: RoutingMatch,
+    agentId: z.string(),
+    review: z.boolean(),
+    /** Prompt for the agent. `{{payload.key}}`, `{{payload.title}}`, `{{payload}}` insert ticket data. */
+    promptTemplate: z.string(),
+    createdAt: z.string(),
+});
+export type RoutingRule = z.infer<typeof RoutingRule>;
+
+export const JiraSettings = z.object({
+    enabled: z.boolean().default(false),
+    baseUrl: z.string().default(""),
+    /** Which tickets Foreman takes. Keep it an explicit opt-in such as a label. */
+    jql: z.string().default("labels = foreman AND status != Done"),
+    pollSeconds: z.number().int().min(2).max(3600).default(60),
+    /** How many tickets one agent works on at once. */
+    wipPerAgent: z.number().int().min(1).max(50).default(2),
+    /** Attempts per ticket before it stops in "failed" (transient failures only). */
+    maxAttempts: z.number().int().min(1).max(10).default(2),
+});
+export type JiraSettings = z.infer<typeof JiraSettings>;
+
+export const DEFAULT_TICKET_PROMPT = `Work on Jira ticket {{payload.key}}: {{payload.title}}
+
+Type: {{payload.type}} · Priority: {{payload.priority}} · Labels: {{payload.labels}}
+
+{{payload.description}}`;

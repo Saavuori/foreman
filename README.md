@@ -20,6 +20,17 @@ Open http://localhost:4517. The MCP endpoint is http://localhost:4517/mcp.
 
 For UI development run `npm run dev` (server with reload on 4517, Vite on 5173).
 
+## Work queue
+
+The **Work** page is a board of tickets taken from Jira: inbox → queued → working → needs you →
+review → done, with failed off to the side. Routing rules decide which agent gets which ticket;
+a ticket can be attempted several times, held, reordered, reassigned or skipped.
+
+Until a real Jira site is configured, intake uses a **built-in mock Jira** (same REST shapes, seeded
+with tickets, with a ticket generator). Give a mock ticket a label such as `mock:needs-approval`
+or `mock:flaky` to choose how the mock agent behaves on it. Everything on the page is also an MCP
+tool (`work_*`, `routing_*`, `jira_*`, `mockjira_*`).
+
 ## No Copilot subscription needed
 
 New agents use the **mock runtime**: scripted scenarios (clean success, stops for approval, tool

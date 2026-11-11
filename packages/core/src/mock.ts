@@ -191,7 +191,8 @@ function hash(text: string): number {
 
 /** Which scenario a run plays: a `[mock:name]` tag in the prompt wins, then the agent's setting. */
 export function pickScenario(run: Run, spec: AgentSpec): MockScenario {
-    const tagged = /\[mock:([\w-]+)\]/.exec(run.prompt)?.[1];
+    // Matches both a "[mock:name]" tag and a "mock:name" ticket label rendered into the prompt.
+    const tagged = /\bmock:([\w-]+)/.exec(run.prompt)?.[1];
     let name = tagged ?? spec.mock.scenario;
     // "random" is seeded by the run's prompt and creation time, so a given run always plays the same way.
     if (name === "random") name = RANDOM_POOL[hash(run.prompt + run.createdAt) % RANDOM_POOL.length]!;

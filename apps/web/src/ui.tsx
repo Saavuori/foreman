@@ -45,7 +45,7 @@ export const runDuration = (run: { startedAt: string | null; finishedAt: string 
     run.startedAt ? duration((run.finishedAt ? Date.parse(run.finishedAt) : Date.now()) - Date.parse(run.startedAt)) : "—";
 export const num = (n: number) => (n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 export const pct = (v: number | null) => (v == null ? "—" : `${Math.round(v * 100)}%`);
-export const SOURCE_LABEL: Record<string, string> = { manual: "Manual", mcp: "MCP", schedule: "Schedule", webhook: "Webhook", replay: "Replay", agent: "Agent" };
+export const SOURCE_LABEL: Record<string, string> = { work: "Ticket", manual: "Manual", mcp: "MCP", schedule: "Schedule", webhook: "Webhook", replay: "Replay", agent: "Agent" };
 
 /** Re-render on an interval so relative times and live durations stay current. */
 export function useTick(ms = 5000) {
