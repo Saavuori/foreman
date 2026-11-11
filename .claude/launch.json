@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "foreman", "runtimeExecutable": "npm", "runtimeArgs": ["start"], "port": 4517 },
+    { "name": "foreman-demo", "runtimeExecutable": "npm", "runtimeArgs": ["run", "demo"], "port": 4517 }
+  ]
+}
