@@ -31,6 +31,19 @@ with tickets, with a ticket generator). Give a mock ticket a label such as `mock
 or `mock:flaky` to choose how the mock agent behaves on it. Everything on the page is also an MCP
 tool (`work_*`, `routing_*`, `jira_*`, `mockjira_*`).
 
+## Notifications
+
+Approvals, failed and finished tickets, tickets waiting too long, Jira outages and a daily digest
+all land in the in-app **inbox**. Rules decide which of them also go to a **channel**:
+
+- **Teams** — paste the address of a Teams *Workflows* webhook ("When a Teams webhook request is
+  received"). Foreman posts Adaptive Cards with buttons that open Foreman and Jira.
+- **Teams preview** — a built-in stand-in that renders the same cards, so rules and card design can
+  be tested without a tenant.
+- **Webhook** — plain JSON to any URL.
+
+Every delivery is logged with its result; failures are retried twice.
+
 ## No Copilot subscription needed
 
 New agents use the **mock runtime**: scripted scenarios (clean success, stops for approval, tool

@@ -56,6 +56,9 @@ export function startDemo(foreman: Foreman): () => void {
         const { agent } = foreman.store.createAgent({ name: def.name, description: def.description, spec: AgentSpec.parse(def.spec), note: "Demo agent", actor: "system:demo" });
         for (const route of def.routes) foreman.store.createRule({ name: route.name, match: route.match, agentId: agent.id, review: route.review ?? false, promptTemplate: DEFAULT_TICKET_PROMPT, enabled: true });
     }
+    const teams = foreman.notify.createChannel({ name: "Agents (Teams preview)", kind: "mock_teams" });
+    foreman.notify.createRule({ name: "Everything that needs a person", events: ["approval_needed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "digest", "custom"], channelId: teams.id });
+    foreman.notify.configure({ agingMinutes: 2 });
     foreman.work.updateSettings({ enabled: true, pollSeconds: 4, wipPerAgent: 2 });
     foreman.mockJira.setGenerator(5);
     void foreman.work.poll().catch(() => {});

@@ -32,6 +32,7 @@ export interface WorkHubOptions {
 export class WorkHub {
     private timer?: ReturnType<typeof setTimeout>;
     private polling = false;
+    private failingSince: string | null = null;
     lastPoll: { at: string; ok: boolean; detail: string } | null = null;
 
     constructor(
@@ -109,11 +110,17 @@ export class WorkHub {
                 else if (result.changed) updated++;
             }
             this.store.setSetting("jira.cursor", startedAt);
+            this.failingSince = null;
             this.lastPoll = { at: startedAt, ok: true, detail: `${tickets.length} matching, ${added} new, ${updated} updated` };
             if (added || updated) this.dispatch();
             return { fetched: tickets.length, added, updated };
         } catch (e) {
             this.lastPoll = { at: new Date().toISOString(), ok: false, detail: e instanceof Error ? e.message : String(e) };
+            // One notice per outage, not one per failed poll.
+            if (!this.failingSince) {
+                this.failingSince = this.lastPoll.at;
+                this.bus.emit("notice", { kind: "intake_failed", severity: "error", title: "Foreman cannot reach Jira", text: this.lastPoll.detail, path: "/work", dedupeKey: `intake:${this.failingSince}` });
+            }
             throw e;
         } finally {
             this.polling = false;
@@ -182,6 +189,7 @@ export class WorkHub {
         if (["done", "failed", "skipped", "review"].includes(state)) stamps.finishedAt = ts;
         const updated = this.store.updateWorkItem(item.id, { state, ...stamps, ...patch });
         this.bus.emit("change", "work");
+        this.bus.emit("work", updated, item.state);
         return updated;
     }
 

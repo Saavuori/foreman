@@ -1156,6 +1156,143 @@ table.grid th.num {
     color: var(--ink-2);
 }
 
+/* ── Notifications ─────────────────────────────────────────────────────── */
+.nav a .count.quiet {
+    background: var(--sunken);
+    color: var(--ink-2);
+}
+.nav a[aria-current="page"] .count.quiet {
+    background: color-mix(in srgb, var(--surface) 22%, transparent);
+    color: inherit;
+}
+.inbox-row .inbox-title {
+    display: block;
+    font-weight: 600;
+}
+.inbox-row.read .inbox-title {
+    font-weight: 400;
+    color: var(--ink-2);
+}
+.inbox-row.read .lamp {
+    opacity: 0.45;
+}
+/* The preview borrows Teams' own look on purpose, so it reads as "this is what Teams shows". */
+.teams {
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background: var(--surface);
+    overflow: hidden;
+}
+.teams-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, #5b5fc7 7%, var(--surface));
+}
+.teams-logo,
+.teams-avatar {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    background: #5b5fc7;
+    color: #fff;
+    font: 700 15px/1 var(--body);
+}
+.teams-avatar {
+    border-radius: 50%;
+    background: var(--ink);
+    color: var(--hivis);
+    font-family: var(--display);
+    font-size: 17px;
+}
+.teams-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 18px 16px 24px;
+    max-height: calc(100vh - 250px);
+    overflow-y: auto;
+    background: var(--paper);
+}
+.teams-msg {
+    display: flex;
+    gap: 10px;
+    max-width: 720px;
+}
+.teams-meta {
+    font-size: 12.5px;
+    margin-bottom: 5px;
+}
+.acard {
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: 0 1px 2px rgb(22 32 43 / 0.06);
+}
+.acard-text {
+    overflow-wrap: anywhere;
+    margin-top: 6px;
+}
+.acard-text:first-child {
+    margin-top: 0;
+}
+.acard-text.bold {
+    font-weight: 600;
+}
+.acard-text.medium {
+    font-size: 16px;
+    line-height: 1.35;
+}
+.acard-text.small {
+    font-size: 11.5px;
+    letter-spacing: 0.04em;
+}
+.acard-facts {
+    display: grid;
+    gap: 3px;
+    margin: 12px 0 0;
+}
+.acard-facts > div {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 10px;
+}
+.acard-facts dt {
+    font-weight: 600;
+}
+.acard-facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+.acard-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+}
+.acard-actions a {
+    padding: 5px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 13px;
+    color: #5b5fc7;
+}
+.acard-actions a:hover {
+    background: color-mix(in srgb, #5b5fc7 8%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .acard-actions a {
+        color: #a9acff;
+    }
+}
+
 /* ── Command palette ───────────────────────────────────────────────────── */
 .overlay {
     position: fixed;

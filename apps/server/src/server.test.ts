@@ -19,7 +19,7 @@ const tool = async (name: string, args: Record<string, unknown> = {}) => {
 };
 
 beforeAll(async () => {
-    const { app, foreman } = await buildApp({ dataDir: "", baseUrl: "http://test", memory: true, simulatedStepDelayMs: 0, token: TOKEN });
+    const { app, foreman } = await buildApp({ dataDir: "", baseUrl: "http://test", memory: true, simulatedStepDelayMs: 0, token: TOKEN, notifyRetryDelaysMs: [5, 5] });
     foreman.start();
     await app.listen({ host: "127.0.0.1", port: 0 });
     const address = app.server.address() as { port: number };
@@ -176,5 +176,96 @@ describe("work queue", () => {
         const res = await fetch(`${base}/mock/jira/browse/PAY-181`);
         expect(res.status).toBe(200);
         expect(await res.text()).toContain("Partial refund");
+    });
+});
+
+describe("notifications", () => {
+    const call = async (name: string, input: unknown = {}) => {
+        const res = await rpc(name, input);
+        if (res.status !== 200) throw new Error(`${name}: ${res.body.error}`);
+        return res.body.result;
+    };
+    const cardText = (message: any) => JSON.stringify(message.payload.attachments[0].content);
+    const waitFor = async <T>(fn: () => Promise<T | undefined | false>, ms = 4000): Promise<T> => {
+        const until = Date.now() + ms;
+        for (;;) {
+            const value = await fn();
+            if (value) return value;
+            if (Date.now() > until) throw new Error("Timed out waiting");
+            await new Promise((r) => setTimeout(r, 20));
+        }
+    };
+
+    it("puts events in the inbox and sends matching ones to a channel as Teams cards", async () => {
+        const preview = await call("channels.create", { name: "Preview", kind: "mock_teams" });
+        expect(preview.address).toBe("Built-in preview");
+        await call("notifyrules.create", { name: "Approvals only", events: ["approval_needed"], channelId: preview.id });
+
+        const { agent } = await call("agents.create", { name: "Pusher", spec: { policy: { autonomy: "act" }, mock: { scenario: "needs-approval" } } });
+        const run = await call("runs.start", { agentId: agent.id, prompt: "Ship it", waitSeconds: 10 });
+        expect(run.status).toBe("waiting_approval");
+
+        const [message] = await waitFor(async () => {
+            const messages = await call("mockteams.messages", { channelId: preview.id });
+            return messages.length ? messages : undefined;
+        });
+        expect(message.payload.attachments[0].contentType).toBe("application/vnd.microsoft.card.adaptive");
+        expect(cardText(message)).toContain("Pusher needs your approval");
+        expect(cardText(message)).toContain("git push");
+        expect(cardText(message)).toContain(`/#/runs/${run.id}`);
+
+        // A failed run reaches the inbox but not this channel, whose rule covers approvals only.
+        await call("runs.cancel", { runId: run.id });
+        await call("agents.update", { agentId: agent.id, spec: { mock: { scenario: "auto" } } });
+        await call("runs.start", { agentId: agent.id, prompt: "Break [fail]", waitSeconds: 10 });
+        const inbox = await call("notify.inbox");
+        expect(inbox.entries.map((e: any) => e.kind)).toEqual(expect.arrayContaining(["approval_needed", "run_failed"]));
+        expect(inbox.unread).toBeGreaterThan(0);
+        expect(await call("mockteams.messages", { channelId: preview.id })).toHaveLength(1);
+        expect((await call("notify.mark_read")).unread).toBe(0);
+    });
+
+    it("posts to a Teams webhook over HTTP, retries failures and logs every outcome", async () => {
+        const teams = await call("channels.create", { name: "Real shape", kind: "teams", webhookUrl: `${base}/mock/teams/over-http` });
+        expect(teams.address).not.toContain("over-http".slice(0, 4) + "-");
+        const sent = await call("channels.test", { channelId: teams.id, kind: "ticket_failed" });
+        expect(sent).toMatchObject({ status: "sent", attempts: 1 });
+        expect(cardText((await call("mockteams.messages", { channelId: "over-http" }))[0])).toContain("PAY-184 failed");
+
+        const broken = await call("channels.create", { name: "Broken", kind: "webhook", webhookUrl: `${base}/hooks/nope/nope` });
+        const failed = await call("channels.test", { channelId: broken.id });
+        expect(failed).toMatchObject({ status: "failed", attempts: 3 });
+        expect(failed.error).toMatch(/404/);
+        expect((await call("notify.log", { limit: 5 })).map((d: any) => d.status)).toEqual(expect.arrayContaining(["sent", "failed"]));
+
+        // The posting address is a secret: masked when listed, redacted in the audit log.
+        const listed = (await call("channels.list")).find((c: any) => c.id === teams.id);
+        expect(JSON.stringify(listed)).not.toContain("over-http");
+        const audit = (await call("audit.list", { limit: 20 })).find((a: any) => a.capability === "channels.create" && a.input.name === "Real shape");
+        expect(audit.input.webhookUrl).toBe("•••");
+        expect((await rpc("channels.create", { name: "No address", kind: "teams" })).status).toBe(400);
+    });
+
+    it("reports ticket outcomes, the digest and custom messages; validates the schedule", async () => {
+        const all = await call("channels.create", { name: "Everything", kind: "mock_teams" });
+        await call("notifyrules.create", { name: "All", channelId: all.id });
+        const agents = await call("agents.list");
+        const worker = agents.find((a: any) => a.name === "Queue worker");
+        const filed = await call("mockjira.create_issue", { summary: "Notify me", project: "NTF" });
+        const item = (await call("work.add", { keys: [filed.key] })).added[0];
+        await call("work.assign", { itemId: item.id, agentId: worker.id });
+        const texts = async () => (await call("mockteams.messages", { channelId: all.id })).map(cardText).join("\n");
+        await waitFor(async () => (await texts()).includes(`${filed.key} is done`));
+
+        await call("notify.send_digest");
+        await call("notify.send", { title: "Deploy window opens at 14:00", severity: "warning" });
+        await waitFor(async () => (await texts()).includes("Deploy window"));
+        expect(await texts()).toMatch(/Last 24 hours: \d+ done/);
+
+        expect((await rpc("notify.configure", { digestEnabled: true, digestCron: "not a cron" })).status).toBe(400);
+        const settings = await call("notify.configure", { digestEnabled: true, digestCron: "0 8 * * 1-5", digestTimezone: "Europe/Helsinki" });
+        expect(settings.digestEnabled).toBe(true);
+        expect((await call("notify.settings")).nextDigestAt).toBeTruthy();
+        expect((await call("notify.preview", { kind: "digest" })).card.type).toBe("AdaptiveCard");
     });
 });

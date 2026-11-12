@@ -88,6 +88,14 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
         );
     });
 
+    // ── Mock Teams: accepts what a Teams Workflows webhook accepts ────────
+    app.post<{ Params: { channel: string } }>("/mock/teams/:channel", async (req, reply) => {
+        const body = req.body as { attachments?: unknown[] } | undefined;
+        if (!body || !Array.isArray(body.attachments)) return reply.code(400).send({ error: "Expected a Teams message with attachments" });
+        foreman.notify.mockTeams.post(req.params.channel, body);
+        return reply.code(202).send();
+    });
+
     // ── MCP over Streamable HTTP (stateless: one server per request) ──────
     app.post("/mcp", async (req, reply) => {
         const client = String(req.headers["x-foreman-client"] ?? req.headers["user-agent"] ?? "client").slice(0, 60);

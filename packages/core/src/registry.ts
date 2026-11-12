@@ -2,7 +2,8 @@ import { EventEmitter } from "node:events";
 import { z, type ZodType } from "zod";
 import type { Engine } from "./engine.ts";
 import type { RuntimeAdapter } from "./runtime.ts";
-import type { Approval, Run, RunEvent } from "./schemas.ts";
+import type { Approval, Run, RunEvent, WorkItem, WorkState } from "./schemas.ts";
+import type { NotifyHub } from "./notify.ts";
 import type { Store } from "./store.ts";
 import type { TriggerHub } from "./triggers.ts";
 import type { MockJira } from "./jira.ts";
@@ -20,7 +21,11 @@ export interface BusEvents {
     event: [event: RunEvent];
     approval: [approval: Approval];
     /** Coarse "something in this collection changed" signal for live UIs. */
-    change: [entity: "agents" | "triggers" | "audit" | "work"];
+    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify"];
+    /** A work item changed state. */
+    work: [item: WorkItem, previous: WorkState];
+    /** Something a person should hear about that has no run or ticket behind it. */
+    notice: [notice: { kind: "intake_failed" | "custom"; severity: "info" | "success" | "warning" | "error"; title: string; text: string; path: string; dedupeKey: string }];
 }
 export class Bus extends EventEmitter<BusEvents> {
     constructor() {
@@ -36,6 +41,7 @@ export interface Services {
     triggers: TriggerHub;
     work: WorkHub;
     mockJira: MockJira;
+    notify: NotifyHub;
     runtimes: Record<string, RuntimeAdapter>;
     registry: Registry;
     info: { version: string; dataDir: string; baseUrl: string; startedAt: string };
@@ -145,7 +151,7 @@ export class Registry {
 
 export const toolName = (capabilityName: string) => capabilityName.replace(/\./g, "_");
 
-const SECRET_KEY = /(secret|token|password|authorization|api[-_]?key)/i;
+const SECRET_KEY = /(secret|token|password|authorization|api[-_]?key|webhook)/i;
 /** Keep credentials out of the audit log. */
 export function redact(value: unknown): unknown {
     if (Array.isArray(value)) return value.map(redact);

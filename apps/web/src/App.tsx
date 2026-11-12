@@ -6,6 +6,7 @@ import { Home } from "./pages/Home.tsx";
 import { Activity, Agents, Approvals, Runs } from "./pages/Lists.tsx";
 import { RunDetail } from "./pages/RunDetail.tsx";
 import { Work } from "./pages/Work.tsx";
+import { Notifications } from "./pages/Notifications.tsx";
 import { Lamp, Modal, ToastProvider } from "./ui.tsx";
 
 const NAV = [
@@ -14,6 +15,7 @@ const NAV = [
     { path: "/agents", label: "Agents", match: "agents" },
     { path: "/runs", label: "Runs", match: "runs" },
     { path: "/approvals", label: "Approvals", match: "approvals" },
+    { path: "/notifications", label: "Notifications", match: "notifications" },
     { path: "/activity", label: "Activity", match: "activity" },
     { path: "/connect", label: "Connect", match: "connect" },
 ];
@@ -29,6 +31,8 @@ function Page({ route }: { route: string[] }) {
             return id === "new" ? <NewAgent /> : id ? <AgentStudio key={id} agentId={id} /> : <Agents />;
         case "runs":
             return id ? <RunDetail key={id} runId={id} /> : <Runs />;
+        case "notifications":
+            return <Notifications view={id} />;
         case "approvals":
             return <Approvals />;
         case "activity":
@@ -154,6 +158,7 @@ export function App() {
     const route = useRoute();
     const live = useLive();
     const pending = useRpc<any[]>("approvals.list", { status: "pending" }, ["approval"]);
+    const inbox = useRpc<any>("notify.inbox", { unreadOnly: true, limit: 1 }, ["notify"]);
     const [palette, setPalette] = useState(false);
     const [locked, setLocked] = useState(false);
 
@@ -180,6 +185,7 @@ export function App() {
                         <a key={item.path} href={`#${item.path}`} aria-current={(route[0] ?? "") === item.match ? "page" : undefined}>
                             {item.label}
                             {item.match === "approvals" && pending.data?.length ? <span className="count">{pending.data.length}</span> : null}
+                            {item.match === "notifications" && inbox.data?.unread ? <span className="count quiet">{inbox.data.unread > 99 ? "99+" : inbox.data.unread}</span> : null}
                         </a>
                     ))}
                     <div className="nav-foot">
