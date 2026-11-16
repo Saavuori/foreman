@@ -99,6 +99,12 @@ guardrails, approvals, budgets and traces. Pick a scenario per agent in the stud
 `[mock:name]` in a prompt. Switch an agent's runtime to `copilot` once Copilot access exists —
 that adapter type-checks against the SDK but has not yet completed a live run.
 
+## Working on the code
+
+`AGENTS.md` is the guide for coding agents (and people) changing this repository. It links to a
+guide for each part: core, capabilities, the run engine, the work queue, notifications, secrets,
+the server, the web UI and the Copilot adapter.
+
 ## Layout
 
 | Path | What |
