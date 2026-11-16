@@ -1156,6 +1156,409 @@ table.grid th.num {
     color: var(--ink-2);
 }
 
+/* ── Charts, timeline, batches ─────────────────────────────────────────── */
+/* Series colours are validated for colour-blind separation on each surface (blue and orange). */
+:root {
+    --series-1: #2463c4;
+    --series-2: #b3590a;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --series-1: #4f8ee8;
+        --series-2: #c8742a;
+    }
+}
+:root[data-theme="dark"] {
+    --series-1: #4f8ee8;
+    --series-2: #c8742a;
+}
+.viz {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.viz-plot {
+    position: relative;
+    height: 170px;
+    margin: 14px 26px 0 30px;
+    touch-action: pan-y;
+}
+.viz-grid {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 1px solid var(--line);
+}
+.viz-grid span {
+    position: absolute;
+    right: 100%;
+    margin-right: 8px;
+    transform: translateY(-50%);
+    font: 11px/1 var(--mono);
+    color: var(--ink-3);
+}
+.viz-cols {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: stretch;
+}
+.viz-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    padding: 0 1px;
+    border: 0;
+    background: none;
+    cursor: default;
+}
+.viz-col i {
+    position: relative;
+    width: 100%;
+    max-width: 24px;
+    min-height: 2px;
+    border-radius: 4px 4px 0 0;
+    background: var(--series-1);
+}
+.viz-col.on,
+.viz-col:focus-visible {
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
+    outline: none;
+}
+.viz-col i b {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    padding-bottom: 3px;
+    font: 600 11.5px/1 var(--mono);
+    color: var(--ink);
+}
+.viz-plot.lines svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+.viz-plot.lines path {
+    fill: none;
+    stroke-width: 2px;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+.viz-plot path.s1 {
+    stroke: var(--series-1);
+}
+.viz-plot path.s2 {
+    stroke: var(--series-2);
+}
+.viz-end {
+    position: absolute;
+    left: 100%;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    transform: translate(-5px, 50%);
+    pointer-events: none;
+}
+.viz-end i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--surface);
+    box-sizing: border-box;
+}
+.viz-end.s1 i {
+    background: var(--series-1);
+}
+.viz-end.s2 i {
+    background: var(--series-2);
+}
+.viz-end b {
+    font: 600 11.5px/1 var(--mono);
+    color: var(--ink);
+}
+.viz-cross {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    border-left: 1px solid var(--line-strong);
+    pointer-events: none;
+}
+.viz-tip {
+    position: absolute;
+    top: 4px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 7px 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    font-size: 12.5px;
+    color: var(--ink-2);
+    white-space: nowrap;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+}
+.viz-tip > span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.viz-tip b {
+    color: var(--ink);
+}
+.viz-tip-head {
+    font-weight: 600;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.viz-x {
+    display: flex;
+    margin: 0 26px 0 30px;
+    font: 11px/1.2 var(--mono);
+    color: var(--ink-3);
+}
+.viz-x span {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    white-space: nowrap;
+    overflow: visible;
+}
+.viz-x.ends {
+    justify-content: space-between;
+}
+.viz-x.ends span {
+    flex: none;
+}
+.viz-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    font-size: 12.5px;
+    color: var(--ink-2);
+}
+.viz-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.viz-legend b {
+    color: var(--ink);
+}
+.viz-key {
+    display: inline-block;
+    width: 14px;
+    height: 0;
+    border-top: 2px solid;
+    border-radius: 1px;
+}
+.viz-key.s1 {
+    border-color: var(--series-1);
+}
+.viz-key.s2 {
+    border-color: var(--series-2);
+}
+.viz-table {
+    margin-top: 6px;
+    font-size: 12.5px;
+}
+.viz-table summary {
+    cursor: pointer;
+    color: var(--ink-3);
+    width: fit-content;
+}
+.viz-table[open] summary {
+    margin-bottom: 6px;
+}
+.viz-table .scroll-x {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+}
+.wip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.wip-track {
+    width: 70px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--sunken);
+    overflow: hidden;
+}
+.wip-track i {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: var(--series-1);
+}
+
+.tl {
+    position: relative;
+    padding: 8px 16px 12px;
+}
+.tl-row {
+    display: grid;
+    grid-template-columns: 170px minmax(0, 1fr);
+    gap: 14px;
+    align-items: center;
+    min-height: 40px;
+    border-top: 1px solid var(--line);
+}
+.tl-row.axis {
+    min-height: 24px;
+    border-top: 0;
+}
+.tl-row > a:first-child {
+    font-weight: 500;
+    line-height: 1.25;
+}
+.tl-row > a:first-child small {
+    display: block;
+    font-weight: 400;
+    font-size: 11.5px;
+    color: var(--ink-3);
+}
+.tl-track {
+    position: relative;
+    height: 40px;
+    margin-right: 18px;
+}
+.tl-row.axis .tl-track {
+    height: 22px;
+}
+.tl-tick {
+    position: absolute;
+    top: 4px;
+    transform: translateX(-50%);
+    font: 11px/1 var(--mono);
+    color: var(--ink-3);
+    white-space: nowrap;
+}
+.tl-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid var(--line);
+}
+.tl-bar {
+    position: absolute;
+    top: 12px;
+    height: 16px;
+    border-radius: 3px;
+    background: var(--idle);
+    /* The surface gap that keeps touching bars apart. */
+    box-shadow: 0 0 0 1px var(--surface);
+    overflow: hidden;
+}
+.tl-bar:hover,
+.tl-bar:focus-visible {
+    filter: brightness(1.15);
+    outline: 2px solid var(--ink);
+    outline-offset: 1px;
+    z-index: 2;
+}
+.tl-bar.running,
+.tl-bar.waiting_approval,
+.tl-key.running {
+    background: var(--run);
+}
+.tl-bar.succeeded,
+.tl-key.succeeded {
+    background: var(--go);
+}
+/* Failed is striped as well as red, so it does not rely on telling red from green. */
+.tl-bar.failed,
+.tl-key.failed {
+    background: repeating-linear-gradient(90deg, var(--stop) 0 4px, color-mix(in srgb, var(--stop) 45%, var(--surface)) 4px 6px);
+}
+.tl-bar i,
+.tl-key.wait {
+    background: repeating-linear-gradient(-45deg, var(--hivis) 0 4px, #16202b 4px 8px);
+}
+.tl-bar i {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    min-width: 2px;
+}
+.tl-key {
+    display: inline-block;
+    width: 16px;
+    height: 10px;
+    border-radius: 2px;
+}
+
+.bprog {
+    display: flex;
+    gap: 2px;
+    height: 12px;
+}
+.bprog i {
+    min-width: 3px;
+    border-radius: 2px;
+    transition: flex-grow 0.4s ease;
+}
+.bprog i.done,
+.bkey.done {
+    background: var(--go);
+}
+.bprog i.working,
+.bkey.working {
+    background: var(--run);
+}
+.bprog i.waiting,
+.bkey.waiting {
+    background: repeating-linear-gradient(-45deg, var(--hivis) 0 4px, #16202b 4px 8px);
+}
+.bprog i.failed,
+.bkey.failed {
+    background: repeating-linear-gradient(90deg, var(--stop) 0 4px, color-mix(in srgb, var(--stop) 45%, var(--surface)) 4px 6px);
+}
+.bprog i.queued,
+.bkey.queued {
+    background: var(--line-strong);
+}
+.bprog i.skipped,
+.bkey.skipped {
+    background: var(--sunken);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.bkey {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+}
+.bjql {
+    display: block;
+    padding: 6px 9px;
+    border-radius: var(--r);
+    background: var(--sunken);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+.wcard-batch {
+    font-size: 11.5px;
+    color: var(--ink-3);
+}
+
 /* ── Questions and Jira updates ────────────────────────────────────────── */
 .answer {
     display: flex;

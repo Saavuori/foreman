@@ -31,6 +31,21 @@ with tickets, with a ticket generator). Give a mock ticket a label such as `mock
 `mock:asks-question` or `mock:flaky` to choose how the mock agent behaves on it. Everything on the page is also an MCP
 tool (`work_*`, `routing_*`, `jira_*`, `mockjira_*`).
 
+## Batches, flow and the timeline
+
+Three more views on the Work page:
+
+- **Batches** — track a set of tickets as one job: a Jira filter (a sprint or an epic is a filter
+  too), a list of keys, or both. Each batch shows done / working / waiting on a person / failed /
+  queued, its cost, and a finish estimate from its own pace. One notification ("Batch finished")
+  goes out when every ticket has finished. The board can be filtered to one batch.
+- **Flow** — tickets done per day, cycle time, queue depth over time, load and results per agent
+  with cost per ticket, the share of tickets that needed a person, and tickets waiting too long.
+- **Timeline** — one lane per agent with each run as a bar, and the stretches spent waiting on a
+  person marked. Shows load, idle gaps and overlaps.
+
+Over MCP: `batches_*`, `work_flow`, `work_timeline`.
+
 ## Connecting a real Jira
 
 Under **Work → Routing & intake → Jira connection**, enter the site address and how to sign in:

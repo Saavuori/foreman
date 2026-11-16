@@ -281,7 +281,7 @@ is alive within seconds — for UI work, demos and end-to-end tests.
 | **B** | Work items, queue, routing, mock Jira, JQL poll + manual add, **Work board** | Tickets from mock Jira flow across the board live; retry, hold, reassign work from UI and MCP |
 | **C** | Notification engine, card templates, mock Teams + preview, in-app inbox, Workflows webhook channel | Every event in §5.1 produces a card in the preview; a real Teams channel receives them when a webhook URL is set |
 | **D** ✅ | Secrets vault, real Jira client (token auth), write-back, agent Jira tools, progress + ask-for-info tools | A real Jira ticket is picked up, commented on, transitioned and closed by a mock agent |
-| **E** | Batches, flow metrics, timeline view, digest | A 40-ticket batch shows progress and sends one summary |
+| **E** ✅ | Batches, flow metrics, timeline view, digest | A 40-ticket batch shows progress and sends one summary |
 | **F** | Teams bot (interactive approvals), Jira webhook intake, BYOK spike | Approve from a Teams card; one real model-backed run end to end |
 
 A–C need nothing outside this machine. D needs a Jira site and token. F needs

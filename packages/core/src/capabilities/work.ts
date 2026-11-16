@@ -18,9 +18,10 @@ const guard = <T>(fn: () => T): T => {
 function present(ctx: Ctx, items: WorkItem[]) {
     const agents = new Map(ctx.store.listAgents(true).map((a) => [a.id, a.name]));
     const approvals = ctx.store.listApprovals({ status: "pending", limit: 500 });
+    const membership = ctx.batches.membership();
     return items.map((item) => {
         const approval = item.state === "needs_you" && item.runId ? approvals.find((a) => a.runId === item.runId) : undefined;
-        return { ...item, agentName: item.agentId ? (agents.get(item.agentId) ?? item.agentId) : null, pendingApproval: approval ? { id: approval.id, summary: approval.summary, kind: approval.kind } : null };
+        return { ...item, batches: membership.get(item.id) ?? [], agentName: item.agentId ? (agents.get(item.agentId) ?? item.agentId) : null, pendingApproval: approval ? { id: approval.id, summary: approval.summary, kind: approval.kind } : null };
     });
 }
 
@@ -31,8 +32,13 @@ export const workCapabilities = [
         description:
             "The work queue: tickets taken from Jira with their state (inbox, queued, working, needs_you, review, done, failed, skipped), agent, progress and queue order. Finished items older than `finishedWithinHours` are left out.",
         readOnly: true,
-        input: z.object({ states: z.array(WorkState).optional(), agentId: z.string().optional(), project: z.string().optional(), finishedWithinHours: z.number().min(1).max(24 * 90).default(24), limit: z.number().int().min(1).max(1000).default(300) }),
-        handler: (ctx, input) => present(ctx, ctx.store.listWorkItems({ ...input, finishedSince: new Date(Date.now() - input.finishedWithinHours * 3_600_000).toISOString() })),
+        input: z.object({ states: z.array(WorkState).optional(), agentId: z.string().optional(), project: z.string().optional(), batchId: z.string().optional().describe("Only tickets in this batch"), finishedWithinHours: z.number().min(1).max(24 * 90).default(24), limit: z.number().int().min(1).max(1000).default(300) }),
+        handler: (ctx, input) => {
+            const items = ctx.store.listWorkItems({ ...input, finishedSince: new Date(Date.now() - input.finishedWithinHours * 3_600_000).toISOString() });
+            if (!input.batchId) return present(ctx, items);
+            const inBatch = new Set(ctx.batches.itemIds(input.batchId));
+            return present(ctx, items.filter((i) => inBatch.has(i.id)));
+        },
     }),
     defineCapability({
         name: "work.get",

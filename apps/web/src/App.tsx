@@ -28,7 +28,7 @@ function Page({ route }: { route: string[] }) {
         case undefined:
             return <Home />;
         case "work":
-            return <Work itemId={id} />;
+            return id === "batch" ? <Work batchId={route[2] ?? ""} /> : <Work itemId={id} />;
         case "agents":
             return id === "new" ? <NewAgent /> : id ? <AgentStudio key={id} agentId={id} /> : <Agents />;
         case "runs":

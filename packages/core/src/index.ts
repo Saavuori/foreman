@@ -6,6 +6,8 @@ import { runCapabilities } from "./capabilities/runs.ts";
 import { workCapabilities } from "./capabilities/work.ts";
 import { notifyCapabilities } from "./capabilities/notify.ts";
 import { vaultCapabilities } from "./capabilities/vault.ts";
+import { flowCapabilities } from "./capabilities/flow.ts";
+import { BatchHub } from "./batches.ts";
 import { Vault } from "./vault.ts";
 import { NotifyHub } from "./notify.ts";
 import { MockJira } from "./jira.ts";
@@ -27,6 +29,8 @@ export { renderPrompt, TriggerHub } from "./triggers.ts";
 export { Engine } from "./engine.ts";
 export { JiraClient, MockJira, MOCK_STATUSES, plainText, toDocument, toTicket } from "./jira.ts";
 export { Vault } from "./vault.ts";
+export { BatchHub, type Batch, type BatchProgress } from "./batches.ts";
+export { flowMetrics, runTimeline } from "./flow.ts";
 export * from "./tools.ts";
 export { WorkHub, defaultRank, ruleMatches } from "./work.ts";
 export * from "./notify.ts";
@@ -61,9 +65,10 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
     const work = new WorkHub(store, engine, bus, { mockJiraUrl: `${options.baseUrl}/mock/jira`, baseUrl: options.baseUrl, vault });
     engine.setToolHost({ jira: () => work.jira() });
     const notify = new NotifyHub(store, bus, { baseUrl: options.baseUrl, retryDelaysMs: options.notifyRetryDelaysMs, vault });
+    const batches = new BatchHub(store, bus, work, notify, { baseUrl: options.baseUrl });
     const registry = new Registry();
-    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...vaultCapabilities, ...opsCapabilities);
-    const services: Services = { store, bus, engine, triggers, work, mockJira, notify, vault, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
+    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...vaultCapabilities, ...flowCapabilities, ...opsCapabilities);
+    const services: Services = { store, bus, engine, triggers, work, mockJira, notify, vault, batches, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
     registry.bind(services);
     return {
         ...services,
@@ -71,11 +76,13 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
             engine.recover();
             triggers.start();
             notify.start();
+            batches.start();
             work.start();
         },
         async stop() {
             triggers.stop();
             work.stop();
+            batches.stop();
             notify.stop();
             await notify.settled();
             await work.settled();

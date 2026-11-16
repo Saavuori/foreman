@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { go, rpc, useRpc } from "../api.ts";
 import { Trace } from "../Trace.tsx";
 import { AnswerBox } from "../Answer.tsx";
+import { Batches, Flow, Timeline } from "./WorkViews.tsx";
 import { duration, Empty, ErrorBanner, Field, Lamp, Modal, pct, relTime, runDuration, Segmented, useAction, useTick } from "../ui.tsx";
 
-type View = "board" | "queue" | "setup";
+type View = "board" | "queue" | "timeline" | "flow" | "batches" | "setup";
 const COLUMNS: { state: string; title: string; hint: string }[] = [
     { state: "inbox", title: "Inbox", hint: "No rule matched. Assign an agent." },
     { state: "queued", title: "Queued", hint: "Waiting for a free slot." },
@@ -62,6 +63,7 @@ function Card({ item, onOpen }: { item: any; onOpen: () => void }) {
                     </span>
                 ) : null}
                 {item.note && item.state !== "needs_you" ? <span className="wcard-note">{item.note}</span> : null}
+                {item.batches?.length ? <span className="wcard-batch truncate">{item.batches.map((b: any) => b.name).join(" · ")}</span> : null}
             </button>
             {item.pendingApproval?.kind === "question" ? (
                 <div className="wcard-ask">
@@ -583,9 +585,20 @@ function Setup({ agents, jira }: { agents: any[]; jira: any }) {
     );
 }
 
-export function Work({ itemId }: { itemId?: string }) {
+export function Work({ itemId, batchId }: { itemId?: string; batchId?: string }) {
     useTick(3000);
-    const [view, setView] = useState<View>("board");
+    const [view, setViewState] = useState<View>(batchId !== undefined ? "batches" : "board");
+    const [batchFilter, setBatchFilter] = useState("");
+    const batches = useRpc<any[]>("batches.list", {}, ["work"]);
+    useEffect(() => {
+        if (batchId !== undefined) setViewState("batches");
+    }, [batchId]);
+    // The batch list has its own address so a notification can link straight to one.
+    const setView = (next: View) => {
+        setViewState(next);
+        if (next === "batches") go("/work/batch");
+        else if (batchId !== undefined) go("/work");
+    };
     const [agentFilter, setAgentFilter] = useState("");
     const [projectFilter, setProjectFilter] = useState("");
     const [adding, setAdding] = useState(false);
@@ -597,7 +610,7 @@ export function Work({ itemId }: { itemId?: string }) {
 
     const all = items.data ?? [];
     const projects = useMemo(() => [...new Set(all.map((i) => i.ticket.project))].sort(), [all]);
-    const shown = all.filter((i) => (!agentFilter || i.agentId === agentFilter) && (!projectFilter || i.ticket.project === projectFilter));
+    const shown = all.filter((i) => (!agentFilter || i.agentId === agentFilter) && (!projectFilter || i.ticket.project === projectFilter) && (!batchFilter || i.batches.some((b: any) => b.id === batchFilter)));
     const queue = shown.filter((i) => i.state === "queued" || i.state === "inbox");
     const s = stats.data;
     const open = (id: string) => go(`/work/${id}`);
@@ -609,7 +622,7 @@ export function Work({ itemId }: { itemId?: string }) {
                     <h1>Work</h1>
                     <p>Tickets taken from Jira, from arrival to done. Each card is a ticket; each attempt at it is a run.</p>
                 </div>
-                <Segmented label="View" value={view} onChange={setView} options={[{ value: "board", label: "Board" }, { value: "queue", label: "Queue" }, { value: "setup", label: "Routing & intake" }]} />
+                <Segmented label="View" value={view} onChange={setView} options={[{ value: "board", label: "Board" }, { value: "queue", label: "Queue" }, { value: "timeline", label: "Timeline" }, { value: "flow", label: "Flow" }, { value: "batches", label: "Batches" }, { value: "setup", label: "Routing & intake" }]} />
                 <button className="btn" disabled={busy} onClick={() => run(() => rpc("work.sync"), "Checked Jira")}>
                     Check Jira now
                 </button>
@@ -663,8 +676,8 @@ export function Work({ itemId }: { itemId?: string }) {
                 </div>
             </div>
 
-            {view !== "setup" ? (
-                <div className="row" style={{ margin: "16px 0 12px" }}>
+            {view === "board" || view === "queue" ? (
+                <div className="row wrap" style={{ margin: "16px 0 12px" }}>
                     <select className="input" style={{ width: 200 }} value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)} aria-label="Filter by agent">
                         <option value="">All agents</option>
                         {(agents.data ?? []).map((a) => (
@@ -681,6 +694,16 @@ export function Work({ itemId }: { itemId?: string }) {
                             </option>
                         ))}
                     </select>
+                    {batches.data?.length ? (
+                        <select className="input" style={{ width: 190 }} value={batchFilter} onChange={(e) => setBatchFilter(e.target.value)} aria-label="Filter by batch">
+                            <option value="">All batches</option>
+                            {batches.data.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                    {b.name}
+                                </option>
+                            ))}
+                        </select>
+                    ) : null}
                     <span className="grow" />
                     <span className="muted" style={{ fontSize: 12.5 }}>
                         {jira.data ? `${jira.data.usingMock ? "Mock Jira" : "Jira"} · ${jira.data.enabled ? `checked every ${jira.data.pollSeconds}s` : "intake off"}${jira.data.lastPoll ? ` · last ${relTime(jira.data.lastPoll.at)}` : ""}` : ""}
@@ -761,6 +784,20 @@ export function Work({ itemId }: { itemId?: string }) {
                         <Empty title="The queue is empty">New tickets appear here in the order they will be worked on.</Empty>
                     )}
                 </div>
+            ) : view === "timeline" ? (
+                <Timeline />
+            ) : view === "flow" ? (
+                <Flow />
+            ) : view === "batches" ? (
+                <Batches
+                    batches={batches.data}
+                    agents={agents.data ?? []}
+                    openId={batchId || undefined}
+                    onBoard={(id) => {
+                        setBatchFilter(id);
+                        setView("board");
+                    }}
+                />
             ) : (
                 <Setup agents={agents.data ?? []} jira={jira.data} />
             )}

@@ -9,6 +9,7 @@ import type { TriggerHub } from "./triggers.ts";
 import type { MockJira } from "./jira.ts";
 import type { WorkHub } from "./work.ts";
 import type { Vault } from "./vault.ts";
+import type { BatchHub } from "./batches.ts";
 
 /** Who is calling. Every capability call is attributed and audited. */
 export interface Actor {
@@ -44,6 +45,7 @@ export interface Services {
     mockJira: MockJira;
     notify: NotifyHub;
     vault: Vault;
+    batches: BatchHub;
     runtimes: Record<string, RuntimeAdapter>;
     registry: Registry;
     info: { version: string; dataDir: string; baseUrl: string; startedAt: string };

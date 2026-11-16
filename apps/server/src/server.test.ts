@@ -401,3 +401,75 @@ describe("secrets, real Jira sign-in and write-back", () => {
         await foreman.work.settled();
     });
 });
+
+describe("batches and flow", () => {
+    const call = async (name: string, input: unknown = {}) => {
+        const res = await rpc(name, input);
+        if (res.status !== 200) throw new Error(`${name} → ${res.status}: ${res.body.error}`);
+        return res.body.result;
+    };
+    const waitFor = async (check: () => Promise<boolean> | boolean, ms = 15000) => {
+        const until = Date.now() + ms;
+        while (!(await check())) {
+            if (Date.now() > until) throw new Error("timed out waiting");
+            await new Promise((r) => setTimeout(r, 25));
+        }
+    };
+
+    it("tracks a 40-ticket batch to the end and says so once", async () => {
+        await call("jira.configure", { wipPerAgent: 4 });
+        const agent = (await call("agents.create", { name: "Batch worker", spec: { policy: { autonomy: "act" }, mock: { scenario: "happy" } } })).agent;
+        for (let i = 1; i <= 39; i++) foreman.mockJira.create({ project: "BAT", summary: `Batch ticket ${i}`, labels: [] });
+        // One ticket fails for good, so the summary has something to report.
+        const bad = foreman.mockJira.create({ project: "BAT", summary: "Batch ticket that fails", labels: ["mock:over-budget"] });
+
+        expect((await rpc("batches.create", { name: "Empty" })).status).toBe(400);
+        const created = await call("batches.create", { name: "Forty", jql: "project = BAT", agentId: agent.id });
+        expect(created.ticketsAdded).toBe(40);
+        expect(created.batch.progress.total).toBe(40);
+        expect(await call("work.list", { batchId: created.batch.id })).toHaveLength(40);
+
+        let batch: any;
+        await waitFor(async () => (batch = (await call("batches.get", { batchId: created.batch.id })).batch).state === "complete");
+        expect(batch.progress).toMatchObject({ total: 40, done: 39, failed: 1, queued: 0, working: 0, waiting: 0 });
+        expect(batch.progress.credits).toBeGreaterThan(0);
+        expect(batch.completedAt).toBeTruthy();
+        const summaries = () => call("notify.inbox", { limit: 500 }).then((inbox: any) => inbox.entries.filter((n: any) => n.kind === "batch_done" && n.title.includes("Forty")));
+        expect(await summaries()).toHaveLength(1);
+        expect((await summaries())[0].title).toContain("39 of 40 done, 1 failed");
+
+        // Retrying the failure reopens the batch; a new ticket joins on refresh.
+        expect((await call("batches.retry_failed", { batchId: batch.id })).retried).toBe(1);
+        foreman.mockJira.create({ project: "BAT", summary: "A late arrival", labels: [] });
+        expect((await call("batches.refresh", { batchId: batch.id })).ticketsAdded).toBe(1);
+        await waitFor(async () => (batch = (await call("batches.get", { batchId: batch.id })).batch).state === "complete");
+        expect(batch.progress).toMatchObject({ total: 41, done: 40, failed: 1 });
+        expect((await call("work.get", { itemId: bad.key })).item.batches[0].name).toBe("Forty");
+
+        expect((await call("batches.delete", { batchId: batch.id })).deleted).toBe(true);
+        expect((await rpc("batches.get", { batchId: batch.id })).status).toBe(404);
+        expect((await call("work.get", { itemId: bad.key })).item.state).toBe("failed");
+    });
+
+    it("reports flow metrics and the agent timeline", async () => {
+        const flow = await call("work.flow", { days: 7, hours: 1 });
+        expect(flow.done).toBeGreaterThanOrEqual(40);
+        expect(flow.throughput.at(-1).done).toBeGreaterThanOrEqual(40);
+        expect(flow.throughput.length).toBeGreaterThanOrEqual(7);
+        expect(flow.cycle.medianMs).toBeGreaterThanOrEqual(0);
+        expect(flow.queueDepth).toHaveLength(49);
+        const worker = flow.perAgent.find((a: any) => a.agentName === "Batch worker");
+        expect(worker).toMatchObject({ failed: 1, wipLimit: 4 });
+        expect(worker.done).toBeGreaterThanOrEqual(40);
+        expect(worker.creditsPerTicket).toBeGreaterThan(0);
+        expect(flow.neededPersonRate).toBeGreaterThan(0);
+        expect(flow.cost.perTicket).toBeGreaterThan(0);
+
+        const timeline = await call("work.timeline", { hours: 1 });
+        const lane = timeline.lanes.find((l: any) => l.agentName === "Batch worker");
+        expect(lane.runs.length).toBeGreaterThanOrEqual(41);
+        expect(lane.runs[0]).toMatchObject({ kind: "work", key: expect.stringMatching(/^BAT-/) });
+        const asker = timeline.lanes.find((l: any) => l.agentName === "Asker");
+        expect(asker.runs[0].waits).toHaveLength(1);
+    });
+});

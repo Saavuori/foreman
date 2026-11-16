@@ -68,10 +68,16 @@ export function startDemo(foreman: Foreman): () => void {
         for (const route of def.routes) foreman.store.createRule({ name: route.name, match: route.match, agentId: agent.id, review: route.review ?? false, promptTemplate: DEFAULT_TICKET_PROMPT, enabled: true });
     }
     const teams = foreman.notify.createChannel({ name: "Agents (Teams preview)", kind: "mock_teams" });
-    foreman.notify.createRule({ name: "Everything that needs a person", events: ["approval_needed", "question_asked", "jira_write_failed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "digest", "custom"], channelId: teams.id });
+    foreman.notify.createRule({ name: "Everything that needs a person", events: ["approval_needed", "question_asked", "batch_done", "jira_write_failed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "digest", "custom"], channelId: teams.id });
     foreman.notify.configure({ agingMinutes: 2 });
     foreman.work.updateSettings({ enabled: true, pollSeconds: 4, wipPerAgent: 2, writeBack: { enabled: true, statusStarted: "In Progress", statusReview: "In Review", statusDone: "Done" } });
     foreman.mockJira.setGenerator(5);
     void foreman.work.poll().catch(() => {});
-    return () => foreman.mockJira.setGenerator(0);
+    // One batch to watch: the documentation tickets, tracked as a single job. It is created a
+    // moment after start because the mock Jira is served by this same process.
+    const batch = setTimeout(() => void foreman.batches.create({ name: "Docs catch-up", jql: "project = DOC" }).catch(() => {}), 2500);
+    return () => {
+        clearTimeout(batch);
+        foreman.mockJira.setGenerator(0);
+    };
 }
