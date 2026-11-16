@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
-import { AgentSpec, CapabilityError, createForeman, type Actor, type ForemanOptions } from "@foreman/core";
+import { AgentSpec, CapabilityError, createForeman, plainText, type Actor, type ForemanOptions } from "@foreman/core";
 import { createMcpServer } from "./mcp.ts";
 
 export interface AppOptions extends ForemanOptions {
@@ -70,11 +70,43 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
 
     // ── Mock Jira: the REST shapes of Jira Cloud, backed by memory ─────────
     const { mockJira } = foreman;
-    app.get<{ Querystring: { jql?: string; maxResults?: string } }>("/mock/jira/rest/api/3/search/jql", async (req) => {
+    // Both API versions are served: v3 as Jira Cloud speaks it, v2 as Data Center does.
+    const J = "/mock/jira/rest/api/:v";
+    const missing = (reply: any) => reply.code(404).send({ errorMessages: ["Issue does not exist"] });
+    app.addHook("preHandler", async (req, reply) => {
+        if (mockJira.requiredAuth && req.url.startsWith("/mock/jira/rest/") && req.headers.authorization !== mockJira.requiredAuth) return reply.code(401).send({ errorMessages: ["Mock Jira: wrong or missing credentials"] });
+    });
+    app.get(`${J}/myself`, async (req) => ({ displayName: req.headers.authorization ? "Mock Jira User" : "Anonymous (mock)", emailAddress: null }));
+    app.get<{ Querystring: { jql?: string; maxResults?: string } }>(`${J}/search/jql`, async (req) => {
         const issues = mockJira.search(req.query.jql ?? "").slice(0, Number(req.query.maxResults ?? 50) || 50);
         return { issues, isLast: true };
     });
-    app.get<{ Params: { key: string } }>("/mock/jira/rest/api/3/issue/:key", async (req, reply) => mockJira.get(req.params.key) ?? reply.code(404).send({ errorMessages: ["Issue does not exist"] }));
+    app.get<{ Querystring: { jql?: string; maxResults?: string; startAt?: string } }>(`${J}/search`, async (req) => {
+        const all = mockJira.search(req.query.jql ?? "");
+        const startAt = Number(req.query.startAt ?? 0) || 0;
+        return { issues: all.slice(startAt, startAt + (Number(req.query.maxResults ?? 50) || 50)), startAt, total: all.length };
+    });
+    app.get<{ Params: { key: string } }>(`${J}/issue/:key`, async (req, reply) => mockJira.get(req.params.key) ?? missing(reply));
+    app.post<{ Params: { key: string }; Body: { body?: unknown } }>(`${J}/issue/:key/comment`, async (req, reply) => {
+        const text = plainText(req.body?.body).trim();
+        if (!text) return reply.code(400).send({ errorMessages: ["Comment body is empty"] });
+        return mockJira.addComment(req.params.key, text) ? reply.code(201).send({ created: true }) : missing(reply);
+    });
+    app.get<{ Params: { key: string } }>(`${J}/issue/:key/transitions`, async (req, reply) => {
+        const transitions = mockJira.transitions(req.params.key);
+        return transitions ? { transitions } : missing(reply);
+    });
+    app.post<{ Params: { key: string }; Body: { transition?: { id?: string } } }>(`${J}/issue/:key/transitions`, async (req, reply) => {
+        if (!mockJira.get(req.params.key)) return missing(reply);
+        return mockJira.transition(req.params.key, String(req.body?.transition?.id ?? "")) ? reply.code(204).send() : reply.code(400).send({ errorMessages: ["No such transition"] });
+    });
+    app.post<{ Body: { fields?: any } }>(`${J}/issue`, async (req, reply) => {
+        const f = req.body?.fields ?? {};
+        if (!f.summary) return reply.code(400).send({ errors: { summary: "You must specify a summary of the issue." } });
+        if (f.parent?.key && !mockJira.get(f.parent.key)) return reply.code(400).send({ errors: { parent: "Parent issue does not exist." } });
+        const issue = mockJira.create({ project: f.project?.key, type: f.issuetype?.name, summary: f.summary, description: plainText(f.description).trim(), labels: f.labels ?? [], parent: f.parent?.key?.toUpperCase() });
+        return reply.code(201).send({ id: issue.key, key: issue.key });
+    });
     app.get<{ Params: { key: string } }>("/mock/jira/browse/:key", async (req, reply) => {
         const issue = mockJira.get(req.params.key);
         if (!issue) return reply.code(404).type("text/plain").send("No such mock ticket");
@@ -84,7 +116,10 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
             `<!doctype html><meta charset="utf-8"><title>${esc(issue.key)} · Mock Jira</title><body style="font:15px/1.5 system-ui;max-width:680px;margin:48px auto;padding:0 20px;color:#16202b">
 <p style="color:#74818e;font-size:13px">Mock Jira · ${esc(f.project.key)} · ${esc(f.issuetype.name)} · ${esc(f.priority.name)} · ${esc(f.status.name)}</p>
 <h1 style="font-size:22px;margin:4px 0 16px">${esc(issue.key)} ${esc(f.summary)}</h1><p>${esc(f.description)}</p>
-<p style="color:#74818e;font-size:13px">Labels: ${esc(f.labels.join(", ") || "none")}</p></body>`,
+<p style="color:#74818e;font-size:13px">Labels: ${esc(f.labels.join(", ") || "none")}${f.parent ? ` · Subtask of <a href="${esc(f.parent.key)}">${esc(f.parent.key)}</a>` : ""}</p>
+${mockJira.subtasks(issue.key).length ? `<h2 style="font-size:15px;margin:28px 0 6px">Subtasks</h2><ul style="padding-left:20px;margin:0">${mockJira.subtasks(issue.key).map((s) => `<li><a href="${esc(s.key)}">${esc(s.key)}</a> ${esc(s.fields.summary)} <span style="color:#74818e">· ${esc(s.fields.status.name)}</span></li>`).join("")}</ul>` : ""}
+<h2 style="font-size:15px;margin:28px 0 6px">Comments (${f.comment.comments.length})</h2>
+${f.comment.comments.map((c) => `<div style="border-left:3px solid #d5dbe1;padding:2px 12px;margin:10px 0"><p style="color:#74818e;font-size:12.5px;margin:0">${esc(c.author.displayName)} · ${esc(c.created.slice(0, 16).replace("T", " "))} UTC</p><p style="margin:4px 0;white-space:pre-wrap">${esc(c.body)}</p></div>`).join("") || '<p style="color:#74818e">None yet.</p>'}</body>`,
         );
     });
 

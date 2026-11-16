@@ -27,9 +27,41 @@ review → done, with failed off to the side. Routing rules decide which agent g
 a ticket can be attempted several times, held, reordered, reassigned or skipped.
 
 Until a real Jira site is configured, intake uses a **built-in mock Jira** (same REST shapes, seeded
-with tickets, with a ticket generator). Give a mock ticket a label such as `mock:needs-approval`
-or `mock:flaky` to choose how the mock agent behaves on it. Everything on the page is also an MCP
+with tickets, with a ticket generator). Give a mock ticket a label such as `mock:needs-approval`,
+`mock:asks-question` or `mock:flaky` to choose how the mock agent behaves on it. Everything on the page is also an MCP
 tool (`work_*`, `routing_*`, `jira_*`, `mockjira_*`).
+
+## Connecting a real Jira
+
+Under **Work → Routing & intake → Jira connection**, enter the site address and how to sign in:
+
+- **Jira Cloud** — the account's email and an [API token](https://id.atlassian.com/manage-profile/security/api-tokens).
+- **Jira Data Center** — a personal access token.
+
+The token is stored encrypted under **Secrets** and is never shown again. "Save and test" asks Jira
+who the credentials belong to. Leave the site empty to go back to the built-in mock.
+
+**Updates to tickets** is off until you turn it on. When on, Foreman itself comments on a ticket
+when work starts, when an agent asks a question, and when it finishes or fails, and can move the
+ticket to a status you name for each of those points.
+
+## What agents can do in Jira, and asking a person
+
+Foreman gives every agent two tools on any runtime: `report_progress` (drives the progress bar)
+and `ask_for_info` (asks a person a question and waits; the ticket moves to *Needs you* until it
+is answered on the board, the Approvals page or with `work.answer`).
+
+Switch on the Jira tools per agent in the studio: `jira_get_issue`, `jira_search`,
+`jira_add_comment`, `jira_transition`, `jira_create_subtask`. The ones that change a ticket go
+through the agent's guardrails, so a rule `jira_transition → ask` keeps a person in the loop.
+
+## Secrets
+
+Credentials are encrypted at rest (AES-256-GCM), can be stored and used but never read back — in
+the UI, the API or MCP — and are removed from run traces if a value ever appears in one. The key
+is a file, `vault.key`, in the data directory (back it up with the database), or is derived from
+`FOREMAN_SECRET_KEY` when that is set. MCP server settings may hold `{{secret:NAME}}` in a header
+or environment value. Notification channel addresses are encrypted the same way.
 
 ## Notifications
 
@@ -69,6 +101,7 @@ that adapter type-checks against the SDK but has not yet completed a live run.
 | `FOREMAN_PORT` / `FOREMAN_HOST` | `4517` / `127.0.0.1` | Where to listen. A non-loopback host requires a token |
 | `FOREMAN_TOKEN` | unset | Bearer token for the API and MCP |
 | `FOREMAN_DATA_DIR` | `./data` | Database and workspaces |
+| `FOREMAN_SECRET_KEY` | unset | Passphrase for the secrets vault, instead of the `vault.key` file |
 | `FOREMAN_GITHUB_TOKEN` | unset | Token for the Copilot runtime instead of the signed-in user |
 
 ## Test

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { go, rpc, useRpc } from "../api.ts";
 import { Trace } from "../Trace.tsx";
+import { AnswerBox } from "../Answer.tsx";
 import { duration, Empty, ErrorBanner, Field, Lamp, Modal, pct, relTime, runDuration, Segmented, useAction, useTick } from "../ui.tsx";
 
 type View = "board" | "queue" | "setup";
@@ -62,7 +63,14 @@ function Card({ item, onOpen }: { item: any; onOpen: () => void }) {
                 ) : null}
                 {item.note && item.state !== "needs_you" ? <span className="wcard-note">{item.note}</span> : null}
             </button>
-            {item.pendingApproval ? (
+            {item.pendingApproval?.kind === "question" ? (
+                <div className="wcard-ask">
+                    <span>{item.pendingApproval.summary}</span>
+                    <button className="btn sm hivis" onClick={onOpen}>
+                        Answer
+                    </button>
+                </div>
+            ) : item.pendingApproval ? (
                 <div className="wcard-ask">
                     <span className="mono">{item.pendingApproval.summary}</span>
                     <div className="row" style={{ gap: 6 }}>
@@ -128,7 +136,15 @@ function Drawer({ itemId, agents, onClose }: { itemId: string; agents: any[]; on
                                 </span>
                             ))}
                         </div>
-                        {item.note ? <div className={`banner ${item.state === "failed" ? "error" : item.state === "needs_you" ? "warn" : ""}`}>{item.note}</div> : null}
+                        {item.pendingApproval?.kind === "question" ? (
+                            <div className="ask-box">
+                                <div className="eyebrow">{item.agentName} asks</div>
+                                <p>{item.pendingApproval.summary}</p>
+                                <AnswerBox approvalId={item.pendingApproval.id} autoFocus />
+                            </div>
+                        ) : item.note ? (
+                            <div className={`banner ${item.state === "failed" ? "error" : item.state === "needs_you" ? "warn" : ""}`}>{item.note}</div>
+                        ) : null}
                         {item.ticket.description ? <p className="drawer-desc">{item.ticket.description}</p> : null}
 
                         <div className="drawer-actions">
@@ -258,9 +274,34 @@ function Setup({ agents, jira }: { agents: any[]; jira: any }) {
     const [form, setForm] = useState<any>(null);
     const [summary, setSummary] = useState("");
     const [labels, setLabels] = useState("foreman");
+    const [conn, setConn] = useState<any>(null);
+    const [wb, setWb] = useState<any>(null);
+    const [test, setTest] = useState<{ ok: boolean; detail: string } | null>(null);
     useEffect(() => {
-        if (jira && !form) setForm({ baseUrl: jira.usingMock ? "" : jira.baseUrl, jql: jira.jql, pollSeconds: jira.pollSeconds, wipPerAgent: jira.wipPerAgent, maxAttempts: jira.maxAttempts });
-    }, [jira, form]);
+        if (jira && !form) setForm({ jql: jira.jql, pollSeconds: jira.pollSeconds, wipPerAgent: jira.wipPerAgent, maxAttempts: jira.maxAttempts });
+        if (jira && !conn) setConn({ baseUrl: jira.usingMock ? "" : jira.baseUrl, flavor: jira.flavor, type: jira.auth.type, email: jira.auth.email, token: "" });
+        if (jira && !wb) setWb(jira.writeBack);
+    }, [jira, form, conn, wb]);
+
+    const saveConnection = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setTest(null);
+        const secretName = jira.auth.secretName || "jira-token";
+        const ok = await run(async () => {
+            // The token goes to the vault first; the connection only ever holds its name.
+            if (conn.type !== "none" && conn.token) await rpc("secrets.set", { name: secretName, secretValue: conn.token, description: "Jira token" });
+            await rpc("jira.configure", { baseUrl: conn.baseUrl.trim(), flavor: conn.flavor, auth: { type: conn.type, email: conn.email.trim(), ...(conn.type !== "none" ? { secretName } : {}) } });
+            return true;
+        }, "Connection saved");
+        if (!ok) return;
+        setConn({ ...conn, token: "" });
+        setTest(await rpc<any>("jira.test").catch((err) => ({ ok: false, detail: String(err.message ?? err) })));
+    };
+    const saveWriteBack = (patch: any) => {
+        const next = { ...wb, ...patch };
+        setWb(next);
+        return run(() => rpc("jira.configure", { writeBack: next }));
+    };
 
     const addRule = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -355,6 +396,115 @@ function Setup({ agents, jira }: { agents: any[]; jira: any }) {
             <div className="stack">
                 <div className="card">
                     <div className="card-head">
+                        <h3>Jira connection</h3>
+                        <span className="grow" />
+                        {jira ? <span className="tag">{jira.usingMock ? "Built-in mock" : jira.flavor === "datacenter" ? "Data Center" : "Jira Cloud"}</span> : null}
+                    </div>
+                    {conn && jira ? (
+                        <form className="card-body stack" onSubmit={saveConnection}>
+                            <Field label="Jira site" hint="Leave empty to use the built-in mock Jira.">
+                                <input className="input code" value={conn.baseUrl} onChange={(e) => setConn({ ...conn, baseUrl: e.target.value, type: !conn.baseUrl && jira.usingMock && conn.type === "none" ? "basic" : conn.type })} placeholder="https://your-team.atlassian.net" />
+                            </Field>
+                            {conn.baseUrl.trim() ? (
+                                <>
+                                    <div className="field">
+                                        <span className="label">Kind of site</span>
+                                        <Segmented label="Kind of site" value={conn.flavor} onChange={(flavor) => setConn({ ...conn, flavor, type: flavor === "datacenter" && conn.type === "basic" ? "bearer" : conn.type })} options={[{ value: "cloud", label: "Jira Cloud" }, { value: "datacenter", label: "Data Center" }]} />
+                                    </div>
+                                    <div className="field">
+                                        <span className="label">Sign in with</span>
+                                        <Segmented label="Sign in with" value={conn.type} onChange={(type) => setConn({ ...conn, type })} options={[{ value: "basic", label: "Email + API token" }, { value: "bearer", label: "Access token" }, { value: "none", label: "Nothing" }]} />
+                                    </div>
+                                    {conn.type === "basic" ? (
+                                        <Field label="Account email">
+                                            <input className="input" type="email" value={conn.email} onChange={(e) => setConn({ ...conn, email: e.target.value })} placeholder="foreman-bot@your-company.com" required />
+                                        </Field>
+                                    ) : null}
+                                    {conn.type !== "none" ? (
+                                        <Field label={conn.type === "basic" ? "API token" : "Personal access token"} hint={jira.auth.secretName && jira.tokenStored ? `A token is stored as “${jira.auth.secretName}”. Type a new one only to replace it.` : "Stored encrypted under Secrets. It is never shown again."}>
+                                            <input className="input code" type="password" value={conn.token} onChange={(e) => setConn({ ...conn, token: e.target.value })} placeholder={jira.auth.secretName && jira.tokenStored ? "••••••••  (stored)" : ""} required={!(jira.auth.secretName && jira.tokenStored)} autoComplete="new-password" />
+                                        </Field>
+                                    ) : null}
+                                </>
+                            ) : null}
+                            <div className="row">
+                                <button className="btn primary" disabled={busy}>
+                                    Save and test
+                                </button>
+                                <button type="button" className="btn" disabled={busy} onClick={async () => setTest((await run(() => rpc<any>("jira.test"))) ?? null)}>
+                                    Test
+                                </button>
+                            </div>
+                            {test ? <div className={`banner ${test.ok ? "" : "error"}`}>{test.detail}</div> : null}
+                        </form>
+                    ) : null}
+                </div>
+
+                <div className="card">
+                    <div className="card-head">
+                        <h3>Updates to tickets</h3>
+                        <span className="grow" />
+                        {wb ? (
+                            <button className={`btn sm ${wb.enabled ? "" : "hivis"}`} disabled={busy} onClick={() => saveWriteBack({ enabled: !wb.enabled })}>
+                                {wb.enabled ? "Turn off" : "Turn on"}
+                            </button>
+                        ) : null}
+                    </div>
+                    {wb && jira ? (
+                        <div className="card-body stack">
+                            <span className="hint">{wb.enabled ? "Foreman comments on each ticket and moves its status as work progresses." : "Off: Foreman reads tickets but writes nothing to Jira itself. Agents with Jira tools can still act, within their guardrails."}</span>
+                            <div className="field">
+                                <span className="label">Comment when</span>
+                                <div className="row wrap" style={{ gap: 6 }}>
+                                    {([["commentOnStart", "work starts"], ["commentOnQuestion", "an agent asks"], ["commentOnDone", "it finishes"], ["commentOnFailed", "it fails"]] as const).map(([key, label]) => (
+                                        <button key={key} type="button" className="chip" aria-pressed={wb[key]} disabled={busy} onClick={() => saveWriteBack({ [key]: !wb[key] })}>
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            <form
+                                className="stack"
+                                onSubmit={(e) => {
+                                    e.preventDefault();
+                                    void run(() => rpc("jira.configure", { writeBack: wb }), "Saved");
+                                }}
+                            >
+                                <div className="cols" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                                    {([["statusStarted", "When work starts"], ["statusReview", "Ready for review"], ["statusDone", "When done"], ["statusFailed", "When it fails"]] as const).map(([key, label]) => (
+                                        <Field key={key} label={label}>
+                                            <input className="input" value={wb[key]} onChange={(e) => setWb({ ...wb, [key]: e.target.value })} placeholder="leave status alone" />
+                                        </Field>
+                                    ))}
+                                </div>
+                                <span className="hint">Status names as they appear in your Jira workflow, e.g. In Progress. Empty leaves the status alone.</span>
+                                <div>
+                                    <button className="btn" disabled={busy}>
+                                        Save statuses
+                                    </button>
+                                </div>
+                            </form>
+                            {jira.recentWriteBacks.length ? (
+                                <div className="field">
+                                    <span className="label">Recent updates</span>
+                                    <div className="wb-log">
+                                        {jira.recentWriteBacks.slice(0, 8).map((w: any, i: number) => (
+                                            <div key={i} className={w.ok ? "" : "bad"} title={w.detail}>
+                                                <Lamp status={w.ok ? "ok" : "error"} bare />
+                                                <span className="mono">{w.key}</span>
+                                                <span className="truncate grow">{w.detail}</span>
+                                                <span className="mono muted">{relTime(w.at).replace(" ago", "")}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
+                </div>
+
+                <div className="card">
+                    <div className="card-head">
                         <h3>Jira intake</h3>
                         <span className="grow" />
                         {jira ? <Lamp status={jira.enabled ? (jira.lastPoll && !jira.lastPoll.ok ? "error" : "ok") : "idle"} bare /> : null}
@@ -367,9 +517,6 @@ function Setup({ agents, jira }: { agents: any[]; jira: any }) {
                                 void run(() => rpc("jira.configure", { ...form, pollSeconds: Number(form.pollSeconds), wipPerAgent: Number(form.wipPerAgent), maxAttempts: Number(form.maxAttempts) }), "Intake settings saved");
                             }}
                         >
-                            <Field label="Jira site" hint={jira.usingMock ? "Empty means the built-in mock Jira. Real sites need credentials, which arrive with the secrets vault." : undefined}>
-                                <input className="input code" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="Built-in mock Jira" />
-                            </Field>
                             <Field label="Take tickets matching" hint="JQL. Keep it an explicit opt-in, such as a label or a bot assignee.">
                                 <textarea className="input code" rows={2} value={form.jql} onChange={(e) => setForm({ ...form, jql: e.target.value })} />
                             </Field>
@@ -416,7 +563,7 @@ function Setup({ agents, jira }: { agents: any[]; jira: any }) {
                             <Field label="File a ticket" hint="Leave the title empty for a generated one.">
                                 <input className="input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="Checkout fails for carts over 99 items" />
                             </Field>
-                            <Field label="Labels" hint="Add mock:needs-approval, mock:flaky, mock:slow, mock:tool-failure or mock:sub-agents to choose how the mock agent behaves.">
+                            <Field label="Labels" hint="Add mock:needs-approval, mock:asks-question, mock:flaky, mock:slow, mock:tool-failure or mock:sub-agents to choose how the mock agent behaves.">
                                 <input className="input code" value={labels} onChange={(e) => setLabels(e.target.value)} />
                             </Field>
                             <div>

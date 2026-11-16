@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { CopilotClient, ToolSet, type MCPServerConfig, type PermissionRequest, type SessionConfig } from "@github/copilot-sdk";
-import type { AgentSpec, AuthorizeRequest, RuntimeAdapter, RuntimeExecution, RuntimeResult } from "@foreman/core";
+import { CopilotClient, defineTool, ToolSet, type MCPServerConfig, type PermissionRequest, type SessionConfig } from "@github/copilot-sdk";
+import { FOREMAN_TOOLS, type AgentSpec, type AuthorizeRequest, type RuntimeAdapter, type RuntimeExecution, type RuntimeResult } from "@foreman/core";
 
 export interface CopilotRuntimeOptions {
     /** Foreman's data directory. The runtime keeps its own state in `<dataDir>/copilot-home`. */
@@ -32,25 +32,29 @@ export function describePermission(request: PermissionRequest): AuthorizeRequest
     }
 }
 
-function mcpServers(spec: AgentSpec): Record<string, MCPServerConfig> {
+/** MCP server env and header values may hold `{{secret:NAME}}`; the value is filled in only here. */
+function mcpServers(spec: AgentSpec, resolve: (text: string) => string): Record<string, MCPServerConfig> {
+    const fill = (values: Record<string, string>) => Object.fromEntries(Object.entries(values).map(([k, v]) => [k, resolve(v)]));
     return Object.fromEntries(
         Object.entries(spec.mcpServers).map(([name, s]): [string, MCPServerConfig] =>
-            s.type === "stdio" ? [name, { type: "stdio", command: s.command, args: s.args, env: s.env, tools: s.tools }] : [name, { type: "http", url: s.url, headers: s.headers, tools: s.tools }],
+            s.type === "stdio" ? [name, { type: "stdio", command: s.command, args: s.args, env: fill(s.env), tools: s.tools }] : [name, { type: "http", url: s.url, headers: fill(s.headers), tools: s.tools }],
         ),
     );
 }
 
 /** Translate a Foreman agent spec into a Copilot session config. Exported for tests. */
-export function toSessionConfig(spec: AgentSpec, workingDirectory: string): Omit<SessionConfig, "onPermissionRequest"> {
+export function toSessionConfig(spec: AgentSpec, workingDirectory: string, resolveSecrets: (text: string) => string = (text) => text): Omit<SessionConfig, "onPermissionRequest"> {
+    // Foreman's own tools are passed separately; only the rest are the runtime's built-ins.
+    const own = new Set(FOREMAN_TOOLS.map((t) => t.name));
     return {
         model: spec.model,
         reasoningEffort: spec.reasoningEffort,
         workingDirectory,
         streaming: false,
         // The client runs in `mode: "empty"`, so only what the spec names is available.
-        availableTools: new ToolSet().addBuiltIn(spec.tools).addMcp("*").addCustom("*"),
+        availableTools: new ToolSet().addBuiltIn(spec.tools.filter((t) => !own.has(t))).addMcp("*").addCustom("*"),
         systemMessage: spec.instructions ? { mode: "append", content: spec.instructions } : undefined,
-        mcpServers: mcpServers(spec),
+        mcpServers: mcpServers(spec, resolveSecrets),
         customAgents: spec.subAgents.map((a) => ({ name: a.name, description: a.description, prompt: a.prompt, tools: a.tools ?? null, model: a.model })),
         sessionLimits: { maxAiCredits: spec.budget.maxAiCredits },
     };
@@ -108,7 +112,21 @@ export class CopilotRuntime implements RuntimeAdapter {
         mkdirSync(workingDirectory, { recursive: true });
 
         const session = await client.createSession({
-            ...toSessionConfig(x.spec, workingDirectory),
+            ...toSessionConfig(x.spec, workingDirectory, x.resolveSecrets),
+            // Foreman checks guardrails itself inside `call`, so the runtime must not ask a second time.
+            tools: x.tools.available.map((t) =>
+                defineTool(t.name, {
+                    title: t.title,
+                    description: t.description,
+                    parameters: t.parameters,
+                    skipPermission: true,
+                    handler: async (args: unknown) => {
+                        const reply = await x.tools.call(t.name, args);
+                        if (!reply.ok) throw new Error(reply.content);
+                        return reply.content;
+                    },
+                }),
+            ),
             onPermissionRequest: async (request) => {
                 const verdict = await x.authorize(describePermission(request));
                 return verdict.allowed ? { kind: "approve-once" } : { kind: "reject", feedback: verdict.reason };

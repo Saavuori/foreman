@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { TimelineStep } from "@foreman/core";
 import { rpc } from "./api.ts";
 import { duration, Lamp, useAction } from "./ui.tsx";
+import { AnswerBox } from "./Answer.tsx";
 
 const KIND_LABEL: Record<TimelineStep["kind"], string> = {
     lifecycle: "Run",
@@ -62,7 +63,9 @@ function Step({ step, offset, total, compact }: { step: TimelineStep; offset: nu
                         <i style={{ left: `${(offset / total) * 100}%`, width: `${(step.durationMs / total) * 100}%` }} />
                     </div>
                 ) : null}
-                {approvalId ? (
+                {approvalId && step.data?.question ? (
+                    <AnswerBox approvalId={approvalId} />
+                ) : approvalId ? (
                     <div className="row" style={{ marginTop: 8 }}>
                         <button className="btn sm hivis" disabled={busy} onClick={() => decide("approve")}>
                             Approve

@@ -1156,6 +1156,56 @@ table.grid th.num {
     color: var(--ink-2);
 }
 
+/* ── Questions and Jira updates ────────────────────────────────────────── */
+.answer {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+}
+.answer textarea {
+    resize: vertical;
+    min-height: 54px;
+}
+.ask-box {
+    padding: 12px 14px;
+    border: 1px solid var(--line-strong);
+    border-left: 4px solid var(--hivis);
+    border-radius: var(--r);
+    background: color-mix(in srgb, var(--hivis) 9%, var(--surface));
+}
+.ask-box p {
+    margin: 4px 0 0;
+    font-size: 15px;
+    line-height: 1.45;
+}
+.ticket.question {
+    align-items: flex-start;
+}
+.ticket .what.plain {
+    font-family: var(--body);
+    font-size: 15px;
+}
+.chip:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+.wb-log {
+    display: grid;
+    gap: 2px;
+    font-size: 12.5px;
+}
+.wb-log > div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 3px 0;
+}
+.wb-log > div.bad {
+    color: var(--stop);
+}
+
 /* ── Notifications ─────────────────────────────────────────────────────── */
 .nav a .count.quiet {
     background: var(--sunken);

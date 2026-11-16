@@ -1,5 +1,6 @@
 import type { PermissionSubject } from "./policy.ts";
 import type { AgentSpec, Run } from "./schemas.ts";
+import type { ToolInfo } from "./tools.ts";
 
 export interface AuthorizeRequest extends PermissionSubject {
     /** One line a human can approve from, e.g. `shell: git push origin main`. */
@@ -17,6 +18,13 @@ export interface RuntimeExecution {
     emit(type: string, data: unknown): void;
     /** Ask the policy engine (and possibly a human) whether an action may proceed. */
     authorize(request: AuthorizeRequest): Promise<{ allowed: boolean; reason: string }>;
+    /** Foreman's own tools (progress, questions, Jira). `call` checks guardrails before acting. */
+    tools: {
+        available: ToolInfo[];
+        call(name: string, args: unknown): Promise<{ ok: boolean; content: string }>;
+    };
+    /** Replace `{{secret:NAME}}` references with vault values, at the moment they are needed. */
+    resolveSecrets(text: string): string;
 }
 
 export interface RuntimeResult {

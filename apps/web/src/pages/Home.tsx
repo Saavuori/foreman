@@ -1,9 +1,29 @@
 import { go, rpc, useRpc } from "../api.ts";
+import { AnswerBox } from "../Answer.tsx";
 import { Empty, ErrorBanner, Lamp, num, pct, relTime, runDuration, SOURCE_LABEL, useAction, useTick } from "../ui.tsx";
 
 export function ApprovalTicket({ approval }: { approval: any }) {
     const { busy, run } = useAction();
     const decide = (decision: "approve" | "deny") => run(() => rpc("approvals.decide", { approvalId: approval.id, decision }), decision === "approve" ? "Approved" : "Denied");
+    const meta = (
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 3 }}>
+            <a href={`#/agents/${approval.agentId}`}>{approval.agentName}</a> · asked {relTime(approval.createdAt)} ·{" "}
+            <a href={`#/runs/${approval.runId}`} style={{ textDecoration: "underline" }}>
+                see the run
+            </a>
+        </div>
+    );
+    if (approval.kind === "question")
+        return (
+            <div className="ticket question">
+                <div className="grow">
+                    <div className="eyebrow">Question</div>
+                    <div className="what plain">{approval.summary}</div>
+                    {meta}
+                    <AnswerBox approvalId={approval.id} />
+                </div>
+            </div>
+        );
     return (
         <div className="ticket">
             <div className="grow">

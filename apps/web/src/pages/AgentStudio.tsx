@@ -106,6 +106,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
     const revisions = useRpc<any[]>("revisions.list", { agentId }, ["agents"]);
     const runs = useRpc<any[]>("runs.list", { agentId, limit: 8 }, ["run"]);
     const models = useRpc<any[]>("system.models", {}, []);
+    const ownTools = useRpc<any[]>("system.agent_tools", {}, []);
     const { busy, run: act } = useAction();
 
     const saved = detail.data?.revision;
@@ -134,6 +135,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
     const set = (patch: Partial<AgentSpec>) => setSpec({ ...spec, ...patch });
     const setPolicy = (patch: Partial<AgentSpec["policy"]>) => set({ policy: { ...spec.policy, ...patch } });
     const setBudget = (patch: Partial<AgentSpec["budget"]>) => set({ budget: { ...spec.budget, ...patch } });
+    const ownNames = new Set((ownTools.data ?? []).map((t) => t.name));
     const toggleTool = (tool: string) => set({ tools: spec.tools.includes(tool) ? spec.tools.filter((t) => t !== tool) : [...spec.tools, tool] });
     const setRule = (i: number, patch: Partial<PolicyRule>) => setPolicy({ rules: spec.policy.rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
     const patchOf = (s: AgentSpec) => ({ ...s, outputSchema: s.outputSchema ?? null, reasoningEffort: s.reasoningEffort ?? null });
@@ -242,7 +244,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                             <div className="field">
                                 <span className="label">Built-in tools</span>
                                 <div className="row wrap" style={{ gap: 6 }}>
-                                    {[...new Set([...COMMON_TOOLS, ...spec.tools])].map((tool) => (
+                                    {[...new Set([...COMMON_TOOLS, ...spec.tools])].filter((tool) => !ownNames.has(tool)).map((tool) => (
                                         <button key={tool} type="button" className="chip" aria-pressed={spec.tools.includes(tool)} onClick={() => toggleTool(tool)}>
                                             {tool}
                                         </button>
@@ -262,7 +264,20 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                                 </div>
                                 <span className="hint">The agent starts with nothing and gets only what is switched on here. Names must match the runtime's own tool names. Scripted mock scenarios use their own fixed tools; guardrails still apply to them.</span>
                             </div>
-                            <JsonField label="MCP servers" rows={4} emptyAs={{}} value={Object.keys(spec.mcpServers).length ? spec.mcpServers : undefined} onChange={(mcpServers) => set({ mcpServers })} hint='Keyed by name, e.g. {"github": {"type": "http", "url": "https://…"}} or {"files": {"type": "stdio", "command": "npx", "args": ["…"]}}' />
+                            <div className="field">
+                                <span className="label">Foreman tools</span>
+                                <div className="row wrap" style={{ gap: 6 }}>
+                                    {(ownTools.data ?? []).map((t) => (
+                                        <button key={t.name} type="button" className="chip" aria-pressed={t.alwaysOn || spec.tools.includes(t.name)} disabled={t.alwaysOn} title={`${t.description}${t.alwaysOn ? " Always available." : t.guarded ? " Changes a ticket, so the guardrails apply." : ""}`} onClick={() => toggleTool(t.name)}>
+                                            {t.name}
+                                        </button>
+                                    ))}
+                                </div>
+                                <span className="hint">
+                                    Work on any runtime. Every agent can report progress and ask a person a question. The Jira tools act on the site set under Work → Routing &amp; intake; add a guardrail such as <code className="mono">jira_transition → ask</code> to keep a person in the loop.
+                                </span>
+                            </div>
+                            <JsonField label="MCP servers" rows={4} emptyAs={{}} value={Object.keys(spec.mcpServers).length ? spec.mcpServers : undefined} onChange={(mcpServers) => set({ mcpServers })} hint='Keyed by name, e.g. {"github": {"type": "http", "url": "https://…"}} or {"files": {"type": "stdio", "command": "npx", "args": ["…"]}}. Put {{secret:NAME}} where a key goes; the value comes from Secrets when the run starts.' />
                             <JsonField label="Sub-agents" rows={3} emptyAs={[]} value={spec.subAgents.length ? spec.subAgents : undefined} onChange={(subAgents) => set({ subAgents })} hint='Specialists this agent can delegate to, e.g. [{"name": "researcher", "description": "…", "prompt": "…", "tools": ["view"]}]' />
                         </section>
 

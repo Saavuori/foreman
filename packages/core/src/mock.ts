@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { permissionKindForTool, type RuntimeAdapter, type RuntimeExecution, type RuntimeResult } from "./runtime.ts";
 import type { AgentSpec, Run } from "./schemas.ts";
+import { foremanTool } from "./tools.ts";
 
 /**
  * One beat of a scripted run. Steps emit the same event types the Copilot SDK does, and tool steps
@@ -16,6 +17,8 @@ export type MockStep =
     /** Never returns: the run ends only when its time limit or a cancel stops it. */
     | { do: "hang" }
     | { do: "say"; content: string }
+    /** Ask a person through ask_for_info, then carry on with whichever branch applies. */
+    | { do: "ask"; question: string; answered: (answer: string) => MockStep[]; unanswered: MockStep[] }
     | { do: "fail"; error: string };
 
 export interface MockContext {
@@ -34,6 +37,8 @@ export interface MockScenario {
 
 const usage = (inputTokens: number, outputTokens: number, cost: number): MockStep => ({ do: "usage", inputTokens, outputTokens, cost });
 const subject = (run: Run) => run.prompt.split("\n")[0]!.slice(0, 70);
+/** The ticket a run is about: from the work queue's payload, else the first key in the prompt. */
+const ticketKey = (run: Run): string | undefined => (run.payload as { key?: string } | undefined)?.key ?? /\b[A-Z][A-Z0-9]+-\d+\b/.exec(run.prompt)?.[0];
 
 export const MOCK_SCENARIOS: MockScenario[] = [
     {
@@ -174,6 +179,52 @@ export const MOCK_SCENARIOS: MockScenario[] = [
         ],
     },
     {
+        name: "asks-question",
+        title: "Asks a person a question",
+        description: "Finds it cannot decide something on its own, asks through ask_for_info and waits. Continues with the answer, or fails if none comes.",
+        script: ({ run }) => [
+            { do: "think", intent: "Checking what the ticket leaves open" },
+            { do: "tool", tool: "view", args: { path: "src/billing/refund.ts" }, result: "Refund totals are rounded in two places with different rules" },
+            usage(1900, 240, 2),
+            { do: "progress", step: 1, total: 3, message: "Waiting for an answer" },
+            {
+                do: "ask",
+                question: "The API and the invoice round refunds differently. Which rule is correct: half-even (12.34) or half-up (12.35)?",
+                answered: (answer) => [
+                    { do: "progress", step: 2, total: 3, message: "Applying the answer" },
+                    { do: "tool", tool: "edit", args: { path: "src/billing/refund.ts", change: `one rounding rule, as answered: ${answer.slice(0, 80)}` }, result: "1 file changed, 9 insertions, 7 deletions", beats: 2 },
+                    usage(2400, 330, 2.5),
+                    { do: "progress", step: 3, total: 3, message: "Writing up" },
+                    { do: "say", content: `Done: ${subject(run)}\n\nI asked which rounding rule applies and was told: "${answer}". Both code paths now use that rule.` },
+                ],
+                unanswered: [{ do: "fail", error: "Nobody answered the question, and guessing a rounding rule for money is not safe. Retry once someone can answer." }],
+            },
+        ],
+    },
+    {
+        name: "jira-updates",
+        title: "Works in Jira",
+        description: "Reads the ticket, creates two subtasks, comments its plan and moves the ticket to In Review — for real, against the configured Jira. Needs the Jira tools switched on for the agent.",
+        script: ({ run }) => {
+            const key = ticketKey(run);
+            if (!key) return [{ do: "think", intent: "No ticket was named; listing open tickets instead" }, { do: "tool", tool: "jira_search", args: { jql: "status != Done", limit: 5 } }, usage(900, 120, 1), { do: "say", content: "No ticket was named in the request, so I only listed open tickets." }];
+            return [
+                { do: "think", intent: `Reading ${key} and its comments` },
+                { do: "tool", tool: "jira_get_issue", args: { key } },
+                usage(1700, 210, 2),
+                { do: "progress", step: 1, total: 3, message: "Breaking the work down" },
+                { do: "tool", tool: "jira_create_subtask", args: { parentKey: key, summary: "Change the code", description: "The smallest change that satisfies the ticket." } },
+                { do: "tool", tool: "jira_create_subtask", args: { parentKey: key, summary: "Update the documentation", description: "Describe the new behaviour." } },
+                { do: "progress", step: 2, total: 3, message: "Noting the plan on the ticket" },
+                { do: "tool", tool: "jira_add_comment", args: { key, text: "Plan: two subtasks — the code change, then the documentation. Nothing else is affected." } },
+                usage(2100, 300, 2.5),
+                { do: "progress", step: 3, total: 3, message: "Handing over for review" },
+                { do: "tool", tool: "jira_transition", args: { key, status: "In Review" } },
+                { do: "say", content: `Planned: ${subject(run)}\n\nCreated two subtasks under ${key}, commented the plan and asked to move the ticket to In Review. Any step the guardrails refused is marked in the trace.` },
+            ];
+        },
+    },
+    {
         name: "bad-output",
         title: "Returns the wrong shape",
         description: "Answers in prose although the agent has a result shape. Fails validation when a result shape is set.",
@@ -259,10 +310,26 @@ export class SimulatedRuntime implements RuntimeAdapter {
                         emit("subagent.completed", { toolCallId, agentName: step.name, summary: `${step.steps.length} steps` });
                         break;
                     }
+                    case "ask": {
+                        const toolCallId = `call_${++calls}`;
+                        emit("tool.execution_start", { toolCallId, toolName: "ask_for_info", arguments: { question: step.question }, parentToolCallId: parent });
+                        const reply = await x.tools.call("ask_for_info", { question: step.question });
+                        emit("tool.execution_complete", reply.ok ? { toolCallId, toolName: "ask_for_info", success: true, result: { content: reply.content } } : { toolCallId, toolName: "ask_for_info", success: false, error: { message: reply.content } });
+                        await play(reply.ok ? step.answered(reply.content) : step.unanswered, parent);
+                        break;
+                    }
                     case "tool": {
                         const toolCallId = `call_${++calls}`;
-                        const kind = step.kind ?? permissionKindForTool(step.tool);
                         const args = step.args ?? {};
+                        if (foremanTool(step.tool)) {
+                            // One of Foreman's own tools: really call it, guardrails included.
+                            emit("tool.execution_start", { toolCallId, toolName: step.tool, arguments: args, parentToolCallId: parent });
+                            await pause(step.beats ?? 1);
+                            const reply = await x.tools.call(step.tool, args);
+                            emit("tool.execution_complete", reply.ok ? { toolCallId, toolName: step.tool, success: true, result: { content: reply.content } } : { toolCallId, toolName: step.tool, success: false, error: { message: reply.content } });
+                            break;
+                        }
+                        const kind = step.kind ?? permissionKindForTool(step.tool);
                         const preview = Object.values(args)[0];
                         const verdict = await x.authorize({ kind, toolName: step.tool, summary: `${kind}: ${step.tool === kind ? "" : step.tool}${preview !== undefined ? ` ${typeof preview === "string" ? preview : JSON.stringify(preview)}` : ""}`.slice(0, 160), request: { kind, toolName: step.tool, arguments: args } });
                         emit("tool.execution_start", { toolCallId, toolName: step.tool, arguments: args, parentToolCallId: parent });

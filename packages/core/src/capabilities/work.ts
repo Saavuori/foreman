@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CapabilityError, defineCapability, actorLabel, type Ctx } from "../registry.ts";
-import { DEFAULT_TICKET_PROMPT, JiraSettings, RoutingMatch, Ticket, WorkState, type WorkItem } from "../schemas.ts";
+import { DEFAULT_TICKET_PROMPT, JiraAuth, JiraSettings, JiraWriteBack, RoutingMatch, Ticket, WorkState, type WorkItem } from "../schemas.ts";
 import { ruleMatches } from "../work.ts";
 import { requireAgent } from "./agents.ts";
 
@@ -20,7 +20,7 @@ function present(ctx: Ctx, items: WorkItem[]) {
     const approvals = ctx.store.listApprovals({ status: "pending", limit: 500 });
     return items.map((item) => {
         const approval = item.state === "needs_you" && item.runId ? approvals.find((a) => a.runId === item.runId) : undefined;
-        return { ...item, agentName: item.agentId ? (agents.get(item.agentId) ?? item.agentId) : null, pendingApproval: approval ? { id: approval.id, summary: approval.summary } : null };
+        return { ...item, agentName: item.agentId ? (agents.get(item.agentId) ?? item.agentId) : null, pendingApproval: approval ? { id: approval.id, summary: approval.summary, kind: approval.kind } : null };
     });
 }
 
@@ -78,6 +78,17 @@ export const workCapabilities = [
         handler: (ctx, { itemId, agentId }) => {
             requireAgent(ctx, agentId);
             return present(ctx, [guard(() => ctx.work.assign(itemId, agentId))])[0];
+        },
+    }),
+    defineCapability({
+        name: "work.answer",
+        title: "Answer an agent's question",
+        description: "Answer the question an agent asked about a ticket (the item is in needs_you with a note starting \"Question:\"). The agent continues straight away with the answer.",
+        input: z.object({ itemId: z.string().describe("Work item id, or a ticket key such as PAY-123"), answer: z.string().min(1).max(4000) }),
+        handler: (ctx, { itemId, answer }) => {
+            const item = ctx.store.getWorkItem(itemId) ?? ctx.store.findWorkItem("jira", itemId);
+            if (!item) throw new CapabilityError(`Work item ${itemId} not found`, "not_found");
+            return present(ctx, [guard(() => ctx.work.answer(item.id, answer, ctx.actor))])[0];
         },
     }),
     defineCapability({
@@ -197,18 +208,45 @@ export const workCapabilities = [
     defineCapability({
         name: "jira.settings",
         title: "Jira intake settings",
-        description: "How tickets are taken from Jira: site, the JQL filter that opts tickets in, poll interval, work-in-progress limit per agent, and the result of the last check.",
+        description:
+            "How Foreman talks to Jira: site, sign-in (by secret name; the token is never shown), the JQL filter that opts tickets in, poll interval, limits, what Foreman writes back to tickets, the result of the last check and the most recent write-backs.",
         readOnly: true,
         input: z.object({}),
-        handler: (ctx) => ({ ...ctx.work.settings(), usingMock: ctx.work.isMock(), lastPoll: ctx.work.lastPoll, mock: { issues: ctx.mockJira.list().length, generatorPerMinute: ctx.mockJira.perMinute } }),
+        handler: (ctx) => {
+            const settings = ctx.work.settings();
+            return {
+                ...settings,
+                usingMock: ctx.work.isMock(),
+                tokenStored: settings.auth.type === "none" || ctx.vault.has(settings.auth.secretName),
+                lastPoll: ctx.work.lastPoll,
+                recentWriteBacks: ctx.work.writeLog.slice(0, 20),
+                mock: { issues: ctx.mockJira.list().length, generatorPerMinute: ctx.mockJira.perMinute },
+            };
+        },
+    }),
+    defineCapability({
+        name: "jira.test",
+        title: "Test the Jira connection",
+        description: "Ask Jira who the configured credentials belong to. Changes nothing. Use it after setting the site or token.",
+        readOnly: true,
+        input: z.object({}),
+        handler: (ctx) => ctx.work.testConnection(),
     }),
     defineCapability({
         name: "jira.configure",
         title: "Configure Jira intake",
-        description: "Turn intake on or off and change the filter, poll interval or limits. Leave baseUrl empty to use the built-in mock Jira.",
-        input: JiraSettings.partial(),
+        description:
+            "Change how Foreman talks to Jira. Leave baseUrl empty to use the built-in mock Jira. For a real site set flavor (cloud or datacenter) and auth: {type: basic, email, secretName} for Jira Cloud with an API token, or {type: bearer, secretName} for a personal access token — store the token first with secrets.set. writeBack controls the comments and status changes Foreman makes itself; it is off until enabled. Only the fields given are changed.",
+        input: JiraSettings.omit({ auth: true, writeBack: true }).partial().extend({ auth: JiraAuth.partial().optional(), writeBack: JiraWriteBack.partial().optional() }),
         handler: (ctx, _input, raw) => {
-            const patch = Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([k]) => k in JiraSettings.shape));
+            const patch = Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([k]) => k in JiraSettings.shape)) as Parameters<typeof ctx.work.updateSettings>[0];
+            const auth = { ...ctx.work.settings().auth, ...patch.auth };
+            if (auth.type !== "none") {
+                if (!auth.secretName) throw new CapabilityError("Give auth.secretName: the name of the stored token (secrets.set)", "invalid_input");
+                if (!ctx.vault.has(auth.secretName)) throw new CapabilityError(`Secret "${auth.secretName}" does not exist; store the token first with secrets.set`, "invalid_input");
+                if (auth.type === "basic" && !auth.email) throw new CapabilityError("Jira Cloud sign-in needs auth.email as well as the token", "invalid_input");
+            }
+            if (typeof patch.baseUrl === "string" && patch.baseUrl && !/^https?:\/\//i.test(patch.baseUrl)) throw new CapabilityError("baseUrl must start with http:// or https://", "invalid_input");
             return { ...ctx.work.updateSettings(patch), usingMock: ctx.work.isMock() };
         },
     }),

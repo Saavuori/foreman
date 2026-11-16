@@ -44,6 +44,17 @@ const AGENTS: DemoAgent[] = [
         },
         routes: [{ name: "Documentation", match: { project: "DOC" }, review: true }],
     },
+    {
+        name: "Ticket planner",
+        description: "Breaks a ticket into subtasks and notes the plan in Jira. Changing a ticket's status needs a person's approval.",
+        spec: {
+            instructions: "Read the ticket, split it into subtasks, comment the plan on the ticket. Ask before changing a status.",
+            tools: ["jira_get_issue", "jira_search", "jira_add_comment", "jira_create_subtask", "jira_transition"],
+            policy: { autonomy: "act", rules: [{ match: "jira_transition", action: "ask", note: "A person confirms status changes" }], approvalTimeoutSeconds: 240 },
+            mock: { scenario: "jira-updates", speed: 1 },
+        },
+        routes: [{ name: "API planning tasks", match: { project: "API", type: "Task" } }],
+    },
 ];
 
 /**
@@ -57,9 +68,9 @@ export function startDemo(foreman: Foreman): () => void {
         for (const route of def.routes) foreman.store.createRule({ name: route.name, match: route.match, agentId: agent.id, review: route.review ?? false, promptTemplate: DEFAULT_TICKET_PROMPT, enabled: true });
     }
     const teams = foreman.notify.createChannel({ name: "Agents (Teams preview)", kind: "mock_teams" });
-    foreman.notify.createRule({ name: "Everything that needs a person", events: ["approval_needed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "digest", "custom"], channelId: teams.id });
+    foreman.notify.createRule({ name: "Everything that needs a person", events: ["approval_needed", "question_asked", "jira_write_failed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "digest", "custom"], channelId: teams.id });
     foreman.notify.configure({ agingMinutes: 2 });
-    foreman.work.updateSettings({ enabled: true, pollSeconds: 4, wipPerAgent: 2 });
+    foreman.work.updateSettings({ enabled: true, pollSeconds: 4, wipPerAgent: 2, writeBack: { enabled: true, statusStarted: "In Progress", statusReview: "In Review", statusDone: "Done" } });
     foreman.mockJira.setGenerator(5);
     void foreman.work.poll().catch(() => {});
     return () => foreman.mockJira.setGenerator(0);

@@ -5,6 +5,8 @@ import { opsCapabilities } from "./capabilities/ops.ts";
 import { runCapabilities } from "./capabilities/runs.ts";
 import { workCapabilities } from "./capabilities/work.ts";
 import { notifyCapabilities } from "./capabilities/notify.ts";
+import { vaultCapabilities } from "./capabilities/vault.ts";
+import { Vault } from "./vault.ts";
 import { NotifyHub } from "./notify.ts";
 import { MockJira } from "./jira.ts";
 import { WorkHub } from "./work.ts";
@@ -23,7 +25,9 @@ export * from "./mock.ts";
 export * from "./timeline.ts";
 export { renderPrompt, TriggerHub } from "./triggers.ts";
 export { Engine } from "./engine.ts";
-export { JiraClient, MockJira, plainText, toTicket } from "./jira.ts";
+export { JiraClient, MockJira, MOCK_STATUSES, plainText, toDocument, toTicket } from "./jira.ts";
+export { Vault } from "./vault.ts";
+export * from "./tools.ts";
 export { WorkHub, defaultRank, ruleMatches } from "./work.ts";
 export * from "./notify.ts";
 export { Store } from "./store.ts";
@@ -39,6 +43,8 @@ export interface ForemanOptions {
     simulatedStepDelayMs?: number;
     /** Delays between notification delivery retries (tests shorten them). */
     notifyRetryDelaysMs?: number[];
+    /** Passphrase for the secrets vault. Without it a key file is kept in the data directory. */
+    secretKey?: string;
 }
 
 /** Wire the store, engine, trigger hub and capability registry together. */
@@ -48,14 +54,16 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
     const bus = new Bus();
     const runtimes: Record<string, RuntimeAdapter> = { simulated: new SimulatedRuntime(options.simulatedStepDelayMs) };
     for (const runtime of options.runtimes ?? []) runtimes[runtime.name] = runtime;
-    const engine = new Engine(store, bus, runtimes, { concurrency: options.concurrency ?? 4 });
+    const vault = new Vault(store, { dataDir: options.dataDir, secretKey: options.secretKey, memory: options.memory });
+    const engine = new Engine(store, bus, runtimes, { concurrency: options.concurrency ?? 4, scrub: (data) => vault.scrubData(data), resolveSecrets: (text) => vault.resolve(text) });
     const triggers = new TriggerHub(store, engine, bus);
     const mockJira = new MockJira();
-    const work = new WorkHub(store, engine, bus, { mockJiraUrl: `${options.baseUrl}/mock/jira` });
-    const notify = new NotifyHub(store, bus, { baseUrl: options.baseUrl, retryDelaysMs: options.notifyRetryDelaysMs });
+    const work = new WorkHub(store, engine, bus, { mockJiraUrl: `${options.baseUrl}/mock/jira`, baseUrl: options.baseUrl, vault });
+    engine.setToolHost({ jira: () => work.jira() });
+    const notify = new NotifyHub(store, bus, { baseUrl: options.baseUrl, retryDelaysMs: options.notifyRetryDelaysMs, vault });
     const registry = new Registry();
-    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...opsCapabilities);
-    const services: Services = { store, bus, engine, triggers, work, mockJira, notify, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
+    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...vaultCapabilities, ...opsCapabilities);
+    const services: Services = { store, bus, engine, triggers, work, mockJira, notify, vault, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
     registry.bind(services);
     return {
         ...services,
@@ -70,6 +78,7 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
             work.stop();
             notify.stop();
             await notify.settled();
+            await work.settled();
             mockJira.setGenerator(0);
             await Promise.all(Object.values(runtimes).map((r) => r.dispose?.()));
             store.close();

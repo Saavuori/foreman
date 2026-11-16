@@ -284,9 +284,36 @@ export const RoutingRule = z.object({
 });
 export type RoutingRule = z.infer<typeof RoutingRule>;
 
+export const JiraAuth = z.object({
+    /** `basic` is Jira Cloud (email + API token); `bearer` is a personal access token (Data Center). */
+    type: z.enum(["none", "basic", "bearer"]).default("none"),
+    email: z.string().default(""),
+    /** Name of the vault secret holding the token. The token itself is never stored here. */
+    secretName: z.string().default(""),
+});
+export type JiraAuth = z.infer<typeof JiraAuth>;
+
+/** What Foreman itself writes to a ticket as it moves through the queue. Off until switched on. */
+export const JiraWriteBack = z.object({
+    enabled: z.boolean().default(false),
+    commentOnStart: z.boolean().default(true),
+    commentOnDone: z.boolean().default(true),
+    commentOnFailed: z.boolean().default(true),
+    commentOnQuestion: z.boolean().default(true),
+    /** Status to move the ticket to at each point. Empty leaves the status alone. */
+    statusStarted: z.string().default(""),
+    statusReview: z.string().default(""),
+    statusDone: z.string().default(""),
+    statusFailed: z.string().default(""),
+});
+export type JiraWriteBack = z.infer<typeof JiraWriteBack>;
+
 export const JiraSettings = z.object({
     enabled: z.boolean().default(false),
     baseUrl: z.string().default(""),
+    flavor: z.enum(["cloud", "datacenter"]).default("cloud"),
+    auth: JiraAuth.prefault({}),
+    writeBack: JiraWriteBack.prefault({}),
     /** Which tickets Foreman takes. Keep it an explicit opt-in such as a label. */
     jql: z.string().default("labels = foreman AND status != Done"),
     pollSeconds: z.number().int().min(2).max(3600).default(60),

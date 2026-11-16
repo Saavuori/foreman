@@ -8,6 +8,7 @@ import type { Store } from "./store.ts";
 import type { TriggerHub } from "./triggers.ts";
 import type { MockJira } from "./jira.ts";
 import type { WorkHub } from "./work.ts";
+import type { Vault } from "./vault.ts";
 
 /** Who is calling. Every capability call is attributed and audited. */
 export interface Actor {
@@ -25,7 +26,7 @@ export interface BusEvents {
     /** A work item changed state. */
     work: [item: WorkItem, previous: WorkState];
     /** Something a person should hear about that has no run or ticket behind it. */
-    notice: [notice: { kind: "intake_failed" | "custom"; severity: "info" | "success" | "warning" | "error"; title: string; text: string; path: string; dedupeKey: string }];
+    notice: [notice: { kind: "intake_failed" | "jira_write_failed" | "custom"; severity: "info" | "success" | "warning" | "error"; title: string; text: string; path: string; dedupeKey: string }];
 }
 export class Bus extends EventEmitter<BusEvents> {
     constructor() {
@@ -42,6 +43,7 @@ export interface Services {
     work: WorkHub;
     mockJira: MockJira;
     notify: NotifyHub;
+    vault: Vault;
     runtimes: Record<string, RuntimeAdapter>;
     registry: Registry;
     info: { version: string; dataDir: string; baseUrl: string; startedAt: string };

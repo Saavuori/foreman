@@ -1,7 +1,8 @@
 import type { Engine } from "./engine.ts";
 import { JiraClient } from "./jira.ts";
-import type { Bus } from "./registry.ts";
-import { ACTIVE_WORK_STATES, DEFAULT_TICKET_PROMPT, JiraSettings, type RoutingMatch, type RoutingRule, type Run, type RunEvent, type Ticket, type WorkItem, type WorkState } from "./schemas.ts";
+import type { Actor, Bus } from "./registry.ts";
+import type { Vault } from "./vault.ts";
+import { ACTIVE_WORK_STATES, DEFAULT_TICKET_PROMPT, JiraAuth, JiraSettings, JiraWriteBack, type RoutingMatch, type RoutingRule, type Run, type RunEvent, type Ticket, type WorkItem, type WorkState } from "./schemas.ts";
 import type { Store } from "./store.ts";
 import { renderPrompt } from "./triggers.ts";
 
@@ -22,7 +23,20 @@ export function ruleMatches(match: RoutingMatch, ticket: Ticket): boolean {
 export interface WorkHubOptions {
     /** Where the built-in mock Jira is served; used until a real site is configured. */
     mockJiraUrl: string;
+    /** Foreman's own address, for links written into ticket comments. */
+    baseUrl: string;
+    vault: Vault;
 }
+
+/** One thing Foreman wrote (or failed to write) to a ticket. */
+export interface WriteBackEntry {
+    at: string;
+    key: string;
+    action: "comment" | "status";
+    detail: string;
+    ok: boolean;
+}
+const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
 /**
  * The work queue. Tickets come in from Jira, are routed to an agent, wait their turn, and are
@@ -34,6 +48,9 @@ export class WorkHub {
     private polling = false;
     private failingSince: string | null = null;
     lastPoll: { at: string; ok: boolean; detail: string } | null = null;
+    /** The most recent write-backs, newest first. Kept in memory. */
+    writeLog: WriteBackEntry[] = [];
+    private chains = new Map<string, Promise<void>>();
 
     constructor(
         private store: Store,
@@ -66,11 +83,14 @@ export class WorkHub {
         const settings = JiraSettings.parse(saved);
         return { ...settings, baseUrl: settings.baseUrl || this.options.mockJiraUrl };
     }
-    updateSettings(patch: Partial<JiraSettings>): JiraSettings {
-        const next = JiraSettings.parse({ ...this.settings(), ...patch });
+    updateSettings(patch: Partial<Omit<JiraSettings, "auth" | "writeBack">> & { auth?: Partial<JiraAuth>; writeBack?: Partial<JiraWriteBack> }): JiraSettings {
+        const current = this.settings();
+        const next = JiraSettings.parse({ ...current, ...patch, auth: { ...current.auth, ...patch.auth }, writeBack: { ...current.writeBack, ...patch.writeBack } });
+        // The mock is the default; do not pin its address, which changes with the port.
+        if (next.baseUrl === this.options.mockJiraUrl) next.baseUrl = "";
         this.store.setSetting("jira", next);
         // A different site or filter means the old "changed since" cursor no longer applies.
-        if (patch.baseUrl !== undefined || patch.jql !== undefined) this.store.setSetting("jira.cursor", null);
+        if (patch.baseUrl !== undefined || patch.jql !== undefined || patch.flavor !== undefined) this.store.setSetting("jira.cursor", null);
         this.schedule();
         this.dispatch();
         this.bus.emit("change", "work");
@@ -80,7 +100,27 @@ export class WorkHub {
         return this.settings().baseUrl === this.options.mockJiraUrl;
     }
     private client() {
-        return new JiraClient(this.settings().baseUrl);
+        const { baseUrl, flavor, auth } = this.settings();
+        const headers: Record<string, string> = {};
+        if (auth.type !== "none") {
+            if (!auth.secretName) throw new Error("Jira sign-in is switched on but no token is stored. Add the token under Jira connection.");
+            const token = this.options.vault.use(auth.secretName);
+            headers.authorization = auth.type === "basic" ? `Basic ${Buffer.from(`${auth.email}:${token}`).toString("base64")}` : `Bearer ${token}`;
+        }
+        return new JiraClient(baseUrl, { headers, flavor });
+    }
+    /** A client for the configured site, for Foreman's agent tools. */
+    jira(): JiraClient {
+        return this.client();
+    }
+    /** Prove the site and credentials work, without changing anything. */
+    async testConnection(): Promise<{ ok: boolean; detail: string }> {
+        try {
+            const me = await this.client().myself();
+            return { ok: true, detail: `Connected as ${me.name}${me.email ? ` (${me.email})` : ""}` };
+        } catch (e) {
+            return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+        }
     }
 
     private schedule() {
@@ -190,7 +230,87 @@ export class WorkHub {
         const updated = this.store.updateWorkItem(item.id, { state, ...stamps, ...patch });
         this.bus.emit("change", "work");
         this.bus.emit("work", updated, item.state);
+        this.writeBack(updated, item.state);
         return updated;
+    }
+
+    // ── writing back to Jira ──────────────────────────────────────────────
+    /**
+     * Keep the ticket in step with the queue: Foreman does this itself, so the ticket shows what
+     * happened even when an agent says nothing. Never throws; failures are logged and notified.
+     */
+    private writeBack(item: WorkItem, previous: WorkState) {
+        const wb = this.settings().writeBack;
+        if (!wb.enabled || item.state === previous) return;
+        const agent = (item.agentId && this.store.getAgent(item.agentId)?.name) || "An agent";
+        const link = `${this.options.baseUrl}/#/work/${item.id}`;
+        const result = () => clip(((item.runId && this.store.getRun(item.runId)?.output) || "").trim(), 1500);
+        let comment: string | null = null;
+        let status = "";
+        switch (item.state) {
+            case "working":
+                if (ACTIVE_WORK_STATES.includes(previous)) return; // back from an approval, not a new attempt
+                if (wb.commentOnStart) comment = `Foreman: ${agent} started on this ticket${item.attempts > 1 ? ` (attempt ${item.attempts})` : ""}.\n\nFollow it here: ${link}`;
+                status = wb.statusStarted;
+                break;
+            case "needs_you": {
+                const question = item.runId ? this.store.listApprovals({ runId: item.runId, status: "pending" }).find((a) => a.kind === "question") : undefined;
+                if (!question || !wb.commentOnQuestion) return;
+                comment = `Foreman: ${agent} needs information before it can continue.\n\n${question.summary}\n\nAnswer here: ${link}`;
+                break;
+            }
+            case "review":
+                if (wb.commentOnDone) comment = `Foreman: ${agent} finished, and the result is waiting for a person to check.\n\n${result()}\n\nReview it here: ${link}`;
+                status = wb.statusReview;
+                break;
+            case "done":
+                if (wb.commentOnDone) comment = ACTIVE_WORK_STATES.includes(previous) ? `Foreman: ${agent} finished this ticket.\n\n${result()}` : "Foreman: the result was accepted.";
+                status = wb.statusDone;
+                break;
+            case "failed":
+                if (wb.commentOnFailed) comment = `Foreman: ${agent} could not finish this ticket after ${item.attempts} attempt${item.attempts === 1 ? "" : "s"}.\n\n${clip(item.note ?? "The run failed.", 800)}\n\nDetails: ${link}`;
+                status = wb.statusFailed;
+                break;
+            default:
+                return;
+        }
+        if (!comment && !status) return;
+        const key = item.ticket.key;
+        const log = (action: WriteBackEntry["action"], detail: string, ok: boolean) => {
+            this.writeLog.unshift({ at: new Date().toISOString(), key, action, detail, ok });
+            this.writeLog.length = Math.min(this.writeLog.length, 60);
+            this.bus.emit("change", "work");
+        };
+        // One ticket's updates go out in order, so "started" never lands after "finished".
+        const job = (this.chains.get(key) ?? Promise.resolve()).then(async () => {
+            let doing: WriteBackEntry["action"] = "comment";
+            try {
+                const client = this.client();
+                if (comment) {
+                    await client.addComment(key, comment);
+                    log("comment", clip(comment.split("\n")[0]!, 120), true);
+                }
+                if (status) {
+                    doing = "status";
+                    const to = await client.transition(key, status);
+                    if (to) {
+                        const fresh = this.store.getWorkItem(item.id);
+                        if (fresh) this.store.updateWorkItem(item.id, { ticket: { ...fresh.ticket, status: to } });
+                        log("status", `Moved to ${to}`, true);
+                    }
+                }
+            } catch (e) {
+                const message = e instanceof Error ? e.message : String(e);
+                log(doing, message, false);
+                this.bus.emit("notice", { kind: "jira_write_failed", severity: "warning", title: `Could not update ${key} in Jira`, text: message, path: `/work/${item.id}`, dedupeKey: `jira-write:${key}:${item.state}:${item.attempts}` });
+            }
+        });
+        this.chains.set(key, job);
+        void job.finally(() => this.chains.get(key) === job && this.chains.delete(key));
+    }
+    /** Resolves when no write-back is in flight. For tests and shutdown. */
+    async settled() {
+        while (this.chains.size) await Promise.allSettled([...this.chains.values()]);
     }
 
     /** Start as many queued items as the limits allow, in rank order. */
@@ -228,7 +348,7 @@ export class WorkHub {
                 break;
             case "waiting_approval": {
                 const approval = this.store.listApprovals({ runId: run.id, status: "pending" })[0];
-                this.setState(item, "needs_you", { note: approval ? `Approve: ${approval.summary}` : "Waiting for an approval" });
+                this.setState(item, "needs_you", { note: approval ? `${approval.kind === "question" ? "Question" : "Approve"}: ${approval.summary}` : "Waiting for an approval" });
                 break;
             }
             case "succeeded":
@@ -278,6 +398,14 @@ export class WorkHub {
         const updated = this.setState(item, "queued", { agentId, ruleId: null, note: null, held: false });
         this.dispatch();
         return this.store.getWorkItem(updated.id)!;
+    }
+    /** Answer the question an agent asked about this ticket; its run continues with the answer. */
+    answer(itemId: string, answer: string, actor: Actor): WorkItem {
+        const item = this.require(itemId);
+        const question = item.runId ? this.store.listApprovals({ runId: item.runId, status: "pending" }).find((a) => a.kind === "question") : undefined;
+        if (!question) throw new Error("No question is waiting on this ticket");
+        this.engine.decideApproval(question.id, true, actor, answer);
+        return this.store.getWorkItem(item.id)!;
     }
     retry(itemId: string, actor = "work"): WorkItem {
         const item = this.require(itemId);

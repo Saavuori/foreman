@@ -4,6 +4,16 @@ import { actorLabel } from "./registry.ts";
 import type { AuthorizeRequest, RuntimeAdapter } from "./runtime.ts";
 import { TERMINAL_STATUSES, type Approval, type Run, type RunUsage } from "./schemas.ts";
 import type { Store } from "./store.ts";
+import type { JiraClient } from "./jira.ts";
+import { FOREMAN_TOOLS, foremanTool, toolEnabled, toolInfo } from "./tools.ts";
+import { z } from "zod";
+
+export interface EngineOptions {
+    concurrency: number;
+    /** Removes vault values from anything about to be recorded. */
+    scrub?: <T>(data: T) => T;
+    resolveSecrets?: (text: string) => string;
+}
 
 interface Active {
     abort: AbortController;
@@ -25,8 +35,14 @@ export class Engine {
         private store: Store,
         private bus: Bus,
         private runtimes: Record<string, RuntimeAdapter>,
-        private opts: { concurrency: number } = { concurrency: 4 },
+        private opts: EngineOptions = { concurrency: 4 },
     ) {}
+
+    private toolHost?: { jira(): JiraClient };
+    /** What Foreman's own agent tools act on. Set once the work queue exists. */
+    setToolHost(host: { jira(): JiraClient }) {
+        this.toolHost = host;
+    }
 
     /** Call once at boot: fail anything a previous process left mid-flight and re-queue the rest. */
     recover() {
@@ -100,7 +116,9 @@ export class Engine {
         let run = store.getRun(runId)!;
         const revision = store.getRevision(run.revisionId);
         const usage: RunUsage = { ...run.usage };
-        const emit = (type: string, data: unknown) => {
+        const scrub = this.opts.scrub ?? (<T>(d: T) => d);
+        const emit = (type: string, raw: unknown) => {
+            const data = scrub(raw);
             // Persist usage as it accrues so a live run shows its spend, not only a finished one.
             if (accumulateUsage(usage, type, data)) store.updateRun(runId, { usage });
             bus.emit("event", store.appendEvent(runId, type, data));
@@ -110,6 +128,7 @@ export class Engine {
             bus.emit("run", run);
         };
         const finish = (status: "succeeded" | "failed" | "cancelled", patch: { output?: string; error?: string } = {}) => {
+            patch = scrub(patch);
             emit(`foreman.run_${status}`, patch.error ? { error: patch.error } : {});
             setStatus({ status, ...patch, finishedAt: new Date().toISOString() });
         };
@@ -142,11 +161,44 @@ export class Engine {
             return verdict;
         };
 
+        // A question is an approval that carries text back: same waiting state, same timeout.
+        const ask = async (question: string): Promise<string | null> => {
+            const approval = store.createApproval({ runId, agentId: run.agentId, kind: "question", toolName: "ask_for_info", summary: question, request: { question } });
+            emit("foreman.question_asked", { approvalId: approval.id, question });
+            setStatus({ status: "waiting_approval" });
+            bus.emit("approval", approval);
+            const verdict = await this.waitForApproval(approval.id, spec.policy.approvalTimeoutSeconds * 1000, state.abort.signal);
+            emit("foreman.question_answered", { approvalId: approval.id, answered: verdict.allowed, answer: verdict.allowed ? verdict.reason : null, reason: verdict.allowed ? undefined : verdict.reason });
+            if (!state.abort.signal.aborted) setStatus({ status: "running" });
+            return verdict.allowed ? verdict.reason : null;
+        };
+        const tools = {
+            available: FOREMAN_TOOLS.filter((t) => toolEnabled(t, spec.tools)).map(toolInfo),
+            call: async (name: string, args: unknown): Promise<{ ok: boolean; content: string }> => {
+                const tool = foremanTool(name);
+                if (!tool) return { ok: false, content: `Unknown tool "${name}"` };
+                if (!toolEnabled(tool, spec.tools)) return { ok: false, content: `${name} is not switched on for this agent` };
+                const parsed = tool.input.safeParse(args ?? {});
+                if (!parsed.success) return { ok: false, content: `Invalid arguments for ${name}: ${z.prettifyError(parsed.error)}` };
+                if (tool.kind !== "internal") {
+                    const verdict = await authorize({ kind: tool.kind, toolName: tool.name, summary: `${tool.title} — ${tool.summary(parsed.data)}`.slice(0, 200), request: { toolName: tool.name, arguments: parsed.data } });
+                    if (!verdict.allowed) return { ok: false, content: `Permission denied: ${verdict.reason}` };
+                }
+                if (!this.toolHost) return { ok: false, content: "Foreman tools are not available on this server" };
+                try {
+                    return { ok: true, content: await tool.handler({ run, emit, ask, jira: () => this.toolHost!.jira() }, parsed.data) };
+                } catch (e) {
+                    return { ok: false, content: e instanceof Error ? e.message : String(e) };
+                }
+            },
+        };
+
         try {
-            const result = await runtime.execute({ run, spec, signal: state.abort.signal, emit, authorize });
+            const result = await runtime.execute({ run, spec, signal: state.abort.signal, emit, authorize, tools, resolveSecrets: this.opts.resolveSecrets ?? ((text) => text) });
             state.abort.signal.throwIfAborted();
             if (result.sessionId) store.updateRun(runId, { sessionId: result.sessionId });
             const mismatch = spec.outputSchema ? checkResultShape(result.output, spec.outputSchema) : null;
+            result.output = scrub(result.output);
             if (mismatch) {
                 store.updateRun(runId, { output: result.output });
                 return finish("failed", { error: `Result does not match the agent's result shape: ${mismatch}` });

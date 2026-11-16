@@ -4,17 +4,20 @@ import { z } from "zod";
 import type { Bus } from "./registry.ts";
 import type { Approval, Run, WorkItem, WorkState } from "./schemas.ts";
 import type { Store } from "./store.ts";
+import type { Vault } from "./vault.ts";
 
 // ── Model ──────────────────────────────────────────────────────────────────
 
 export const EVENT_KINDS = {
     approval_needed: "Approval needed",
+    question_asked: "Question from an agent",
     ticket_review: "Ticket ready for review",
     ticket_done: "Ticket done",
     ticket_failed: "Ticket failed",
     run_failed: "Run failed",
     ticket_aging: "Ticket waiting too long",
     intake_failed: "Jira check failing",
+    jira_write_failed: "Jira update failed",
     digest: "Daily digest",
     custom: "Message from an agent or person",
 } as const;
@@ -170,6 +173,8 @@ export interface NotifyHubOptions {
     /** Retry delays; tests shorten them. */
     retryDelaysMs?: number[];
     fetch?: typeof fetch;
+    /** Encrypts channel addresses at rest. */
+    vault?: Vault;
 }
 
 /**
@@ -192,6 +197,8 @@ export class NotifyHub {
         private options: NotifyHubOptions,
     ) {
         store.db.exec(SCHEMA);
+        // Addresses saved before the vault existed are sealed on first start.
+        if (options.vault) for (const row of this.q<{ id: string; webhook_url: string }>("SELECT id, webhook_url FROM channels WHERE webhook_url != '' AND webhook_url NOT LIKE 'enc:%'")) this.x("UPDATE channels SET webhook_url = ? WHERE id = ?", options.vault.seal(row.webhook_url), row.id);
         this.mockTeams = new MockTeams(() => bus.emit("change", "notify"));
         this.retryDelays = options.retryDelaysMs ?? RETRY_DELAYS_MS;
         this.doFetch = options.fetch ?? fetch;
@@ -235,6 +242,20 @@ export class NotifyHub {
         const run = this.store.getRun(approval.runId);
         const agent = this.store.getAgent(approval.agentId);
         const item = run?.source.workItemId ? this.store.getWorkItem(run.source.workItemId) : undefined;
+        if (approval.kind === "question") {
+            return void this.emit({
+                kind: "question_asked",
+                severity: "warning",
+                title: item ? `${item.ticket.key}: ${agent?.name ?? "An agent"} has a question` : `${agent?.name ?? "An agent"} has a question`,
+                text: clip(approval.summary, 600),
+                facts: [...(item ? ([["Ticket", `${item.ticket.key} ${clip(item.ticket.title, 80)}`], ["Reporter", item.ticket.reporter ?? "unknown"]] as [string, string][]) : []), ["Agent", agent?.name ?? approval.agentId]],
+                links: [{ title: "Answer", url: this.url(item ? `/work/${item.id}` : `/runs/${approval.runId}`) }, ...(item ? [{ title: "Open in Jira", url: item.ticket.url }] : [])],
+                path: item ? `/work/${item.id}` : `/runs/${approval.runId}`,
+                dedupeKey: `approval:${approval.id}`,
+                agentId: approval.agentId,
+                project: item?.ticket.project,
+            });
+        }
         this.emit({
             kind: "approval_needed",
             severity: "warning",
@@ -413,6 +434,7 @@ export class NotifyHub {
     private async post(channel: Channel, event: NotifyEvent) {
         if (channel.kind === "mock_teams") return void this.mockTeams.post(channel.id, toTeamsPayload(event));
         const body = channel.kind === "teams" ? toTeamsPayload(event) : toWebhookPayload(event);
+        if (!channel.webhookUrl) throw new Error("The channel has no usable address — enter it again");
         let response: Response;
         try {
             response = await this.doFetch(channel.webhookUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
@@ -423,7 +445,15 @@ export class NotifyHub {
     }
 
     // ── channels, rules, log, inbox, settings ─────────────────────────────
-    private toChannel = (r: any): Channel => ({ id: r.id, name: r.name, kind: r.kind, webhookUrl: r.webhook_url, enabled: !!r.enabled, createdAt: r.created_at });
+    private seal = (url: string) => this.options.vault?.seal(url) ?? url;
+    private unseal(sealed: string): string {
+        try {
+            return this.options.vault?.unseal(sealed) ?? sealed;
+        } catch {
+            return ""; // the vault key changed; the address has to be entered again
+        }
+    }
+    private toChannel = (r: any): Channel => ({ id: r.id, name: r.name, kind: r.kind, webhookUrl: this.unseal(r.webhook_url), enabled: !!r.enabled, createdAt: r.created_at });
     listChannels(): Channel[] {
         return this.q("SELECT * FROM channels ORDER BY created_at").map(this.toChannel);
     }
@@ -432,14 +462,14 @@ export class NotifyHub {
     }
     createChannel(input: { name: string; kind: ChannelKind; webhookUrl?: string; enabled?: boolean }): Channel {
         const channelId = id("chn");
-        this.x("INSERT INTO channels (id, name, kind, webhook_url, enabled, created_at) VALUES (?,?,?,?,?,?)", channelId, input.name, input.kind, input.kind === "mock_teams" ? "" : (input.webhookUrl ?? ""), input.enabled === false ? 0 : 1, new Date().toISOString());
+        this.x("INSERT INTO channels (id, name, kind, webhook_url, enabled, created_at) VALUES (?,?,?,?,?,?)", channelId, input.name, input.kind, input.kind === "mock_teams" ? "" : this.seal(input.webhookUrl ?? ""), input.enabled === false ? 0 : 1, new Date().toISOString());
         this.bus.emit("change", "notify");
         return this.getChannel(channelId)!;
     }
     updateChannel(channelId: string, patch: { name?: string; webhookUrl?: string; enabled?: boolean }): Channel {
         const c = this.getChannel(channelId);
         if (!c) throw new Error(`Channel ${channelId} not found`);
-        this.x("UPDATE channels SET name = ?, webhook_url = ?, enabled = ? WHERE id = ?", patch.name ?? c.name, patch.webhookUrl ?? c.webhookUrl, (patch.enabled ?? c.enabled) ? 1 : 0, channelId);
+        this.x("UPDATE channels SET name = ?, webhook_url = ?, enabled = ? WHERE id = ?", patch.name ?? c.name, this.seal(patch.webhookUrl ?? c.webhookUrl), (patch.enabled ?? c.enabled) ? 1 : 0, channelId);
         this.bus.emit("change", "notify");
         return this.getChannel(channelId)!;
     }

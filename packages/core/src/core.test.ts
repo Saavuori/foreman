@@ -209,3 +209,24 @@ describe("mock scenarios", () => {
         expect((await call<Run>("runs.wait", { runId: started.id, timeoutSeconds: 5 })).status).toBe("cancelled");
     });
 });
+
+describe("vault", () => {
+    it("seals, resolves references and scrubs", () => {
+        const { f } = boot();
+        f.vault.set("api-key", "s3cr3t-value-123");
+        const sealed = f.vault.seal("hello");
+        expect(sealed).toMatch(/^enc:v1:/);
+        expect(f.vault.unseal(sealed)).toBe("hello");
+        expect(f.vault.unseal("plain, stored before the vault")).toBe("plain, stored before the vault");
+        expect(f.vault.resolve("Bearer {{secret:api-key}}")).toBe("Bearer s3cr3t-value-123");
+        expect(() => f.vault.resolve("{{secret:nope}}")).toThrow(/does not exist/);
+        expect(f.vault.scrub("token=s3cr3t-value-123;")).toBe("token=«secret:api-key»;");
+        expect(f.vault.scrubData({ a: ["x s3cr3t-value-123"] })).toEqual({ a: ["x «secret:api-key»"] });
+        expect(f.vault.list()[0]).toMatchObject({ name: "api-key" });
+        expect(Object.values(f.vault.list()[0]!).join()).not.toContain("s3cr3t");
+
+        // A different key cannot read what this one sealed.
+        const other = boot();
+        expect(() => other.f.vault.unseal(sealed)).toThrow(/cannot be decrypted/);
+    });
+});

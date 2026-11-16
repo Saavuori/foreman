@@ -7,6 +7,7 @@ const TOKEN = "test-token";
 let base: string;
 let close: () => Promise<void>;
 let mcp: Client;
+let foreman: Awaited<ReturnType<typeof buildApp>>["foreman"];
 
 const rpc = async (name: string, input: unknown = {}, token = TOKEN) => {
     const res = await fetch(`${base}/api/rpc/${name}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(input) });
@@ -19,7 +20,9 @@ const tool = async (name: string, args: Record<string, unknown> = {}) => {
 };
 
 beforeAll(async () => {
-    const { app, foreman } = await buildApp({ dataDir: "", baseUrl: "http://test", memory: true, simulatedStepDelayMs: 0, token: TOKEN, notifyRetryDelaysMs: [5, 5] });
+    const built = await buildApp({ dataDir: "", baseUrl: "http://test", memory: true, simulatedStepDelayMs: 0, token: TOKEN, notifyRetryDelaysMs: [5, 5] });
+    const { app } = built;
+    foreman = built.foreman;
     foreman.start();
     await app.listen({ host: "127.0.0.1", port: 0 });
     const address = app.server.address() as { port: number };
@@ -112,9 +115,9 @@ describe("work queue", () => {
 
         // No rules yet: everything the filter matches lands in the inbox, and unlabelled tickets are left alone.
         const first = (await rpc("work.sync")).body.result;
-        expect(first.added).toBe(12);
+        expect(first.added).toBe(14);
         expect((await rpc("work.sync")).body.result).toMatchObject({ added: 0, updated: 0 });
-        expect((await rpc("work.stats")).body.result.byState.inbox).toBe(12);
+        expect((await rpc("work.stats")).body.result.byState.inbox).toBe(14);
 
         expect((await rpc("routing.test", { ticket: { project: "DOC", type: "Task" } })).body.result.outcome).toBe("inbox");
         const created = (await rpc("routing.create", { name: "Docs", match: { project: "doc" }, agentId: agent.id, review: true })).body.result;
@@ -267,5 +270,134 @@ describe("notifications", () => {
         expect(settings.digestEnabled).toBe(true);
         expect((await call("notify.settings")).nextDigestAt).toBeTruthy();
         expect((await call("notify.preview", { kind: "digest" })).card.type).toBe("AdaptiveCard");
+    });
+});
+
+describe("secrets, real Jira sign-in and write-back", () => {
+    const call = async (name: string, input: unknown = {}) => {
+        const res = await rpc(name, input);
+        if (res.status !== 200) throw new Error(`${name} → ${res.status}: ${res.body.error}`);
+        return res.body.result;
+    };
+    const waitFor = async (check: () => Promise<boolean> | boolean, ms = 8000) => {
+        const until = Date.now() + ms;
+        while (!(await check())) {
+            if (Date.now() > until) throw new Error("timed out waiting");
+            await new Promise((r) => setTimeout(r, 20));
+        }
+    };
+    const settle = async (key: string, states: string[]) => {
+        let item: any;
+        await waitFor(async () => states.includes((item = (await call("work.get", { itemId: key })).item).state));
+        return item;
+    };
+    const issue = (key: string) => foreman.mockJira.get(key)!;
+    const comments = (key: string) => issue(key).fields.comment.comments.map((c) => c.body).join("\n---\n");
+    const TOKEN_VALUE = "jira-tok-8f3a1c9d77";
+
+    it("stores secrets write-only, encrypted, and keeps them out of the audit log and traces", async () => {
+        const stored = await call("secrets.set", { name: "jira-token", secretValue: TOKEN_VALUE, description: "Jira API token" });
+        expect(JSON.stringify(stored)).not.toContain(TOKEN_VALUE);
+        const listed = await call("secrets.list");
+        expect(listed.secrets.map((s: any) => s.name)).toEqual(["jira-token"]);
+        expect(JSON.stringify(listed)).not.toContain(TOKEN_VALUE);
+        expect((foreman.store.db.prepare("SELECT sealed FROM secrets WHERE name = 'jira-token'").get() as any).sealed).toMatch(/^enc:v1:/);
+        expect(JSON.stringify(await call("audit.list", { limit: 20 }))).not.toContain(TOKEN_VALUE);
+        expect((await rpc("secrets.set", { name: "bad name!", secretValue: "x" })).status).toBe(400);
+
+        // A value that reaches a run (here through the prompt) is scrubbed from what is recorded.
+        const agent = (await call("agents.create", { name: "Leaky", spec: { mock: { scenario: "auto" } } })).agent;
+        const run = await call("runs.start", { agentId: agent.id, prompt: `Use ${TOKEN_VALUE} to sign in`, wait: true });
+        const events = JSON.stringify(await call("runs.events", { runId: run.id }));
+        expect(events).not.toContain(TOKEN_VALUE);
+        expect(events).toContain("«secret:jira-token»");
+
+        // Channel addresses are sealed at rest too.
+        const channel = await call("channels.create", { name: "Sealed", kind: "webhook", webhookUrl: "https://example.test/hook/abcdef123456" });
+        expect((foreman.store.db.prepare("SELECT webhook_url FROM channels WHERE id = ?").get(channel.id) as any).webhook_url).toMatch(/^enc:v1:/);
+        await call("channels.delete", { channelId: channel.id });
+    });
+
+    it("signs in to Jira with a stored token, as Cloud and as Data Center", async () => {
+        foreman.mockJira.requiredAuth = `Bearer ${TOKEN_VALUE}`;
+        expect((await call("jira.test")).ok).toBe(false);
+        expect((await rpc("work.sync")).body.error).toMatch(/401/);
+
+        expect((await rpc("jira.configure", { auth: { type: "bearer", secretName: "missing" } })).status).toBe(400);
+        expect((await rpc("jira.configure", { auth: { type: "basic", secretName: "jira-token" } })).status).toBe(400);
+        const configured = await call("jira.configure", { flavor: "datacenter", auth: { type: "bearer", secretName: "jira-token" } });
+        expect(JSON.stringify(configured)).not.toContain(TOKEN_VALUE);
+        expect(await call("jira.test")).toMatchObject({ ok: true, detail: "Connected as Mock Jira User" });
+        // Data Center: REST v2 with startAt paging.
+        expect((await call("work.sync")).fetched).toBeGreaterThan(10);
+
+        foreman.mockJira.requiredAuth = `Basic ${Buffer.from(`bot@example.test:${TOKEN_VALUE}`).toString("base64")}`;
+        await call("jira.configure", { flavor: "cloud", auth: { type: "basic", email: "bot@example.test" } });
+        expect((await call("jira.test")).ok).toBe(true);
+        expect((await call("secrets.list")).secrets[0].usedBy).toEqual(["Jira connection"]);
+    });
+
+    it("writes progress back to the ticket and lets an agent ask a question", async () => {
+        await call("jira.configure", { writeBack: { enabled: true, statusStarted: "In Progress", statusReview: "In Review", statusDone: "Done" } });
+        const agent = (await call("agents.create", { name: "Asker", spec: { policy: { autonomy: "act" }, mock: { scenario: "asks-question" } } })).agent;
+        const filed = await call("mockjira.create_issue", { summary: "Refund totals differ", project: "ASK" });
+        const added = (await call("work.add", { keys: [filed.key] })).added[0];
+        await call("work.assign", { itemId: added.id, agentId: agent.id });
+
+        const waiting = await settle(filed.key, ["needs_you"]);
+        expect(waiting.note).toMatch(/^Question: .*rounding|^Question: .*round/);
+        expect(waiting.pendingApproval.kind).toBe("question");
+        await waitFor(() => /needs information/.test(comments(filed.key)));
+        expect(comments(filed.key)).toMatch(/Asker started on this ticket/);
+        expect(issue(filed.key).fields.status.name).toBe("In Progress");
+        expect((await call("notify.inbox", { limit: 50 })).entries.some((n: any) => n.kind === "question_asked")).toBe(true);
+
+        // A question cannot be "approved" without an answer.
+        expect((await rpc("approvals.decide", { approvalId: waiting.pendingApproval.id, decision: "approve" })).status).toBe(400);
+        await call("work.answer", { itemId: filed.key, answer: "half-even, as finance does" });
+        const done = await settle(filed.key, ["done"]);
+        const run = (await call("runs.get", { runId: done.runId })).run;
+        expect(run.output).toContain("half-even, as finance does");
+        const steps = (await call("runs.timeline", { runId: done.runId })).steps;
+        expect(steps.find((s: any) => s.title.startsWith("Question:")).detail).toBe("Answer: half-even, as finance does");
+        await waitFor(() => issue(filed.key).fields.status.name === "Done");
+        expect(comments(filed.key)).toMatch(/Asker finished this ticket/);
+        expect((await call("work.get", { itemId: filed.key })).item.ticket.status).toBe("Done");
+        expect((await call("jira.settings")).recentWriteBacks.some((w: any) => w.key === filed.key && w.action === "status" && w.ok)).toBe(true);
+    });
+
+    it("gives agents Jira tools that obey their guardrails", async () => {
+        const spec = { tools: ["jira_get_issue", "jira_add_comment", "jira_create_subtask", "jira_transition"], policy: { autonomy: "act", rules: [{ match: "jira_transition", action: "ask" }] }, mock: { scenario: "jira-updates" } };
+        const agent = (await call("agents.create", { name: "Planner", spec })).agent;
+        const filed = await call("mockjira.create_issue", { summary: "Split the rework", project: "PLN" });
+        const added = (await call("work.add", { keys: [filed.key] })).added[0];
+        await call("work.assign", { itemId: added.id, agentId: agent.id });
+
+        // Reading, commenting and creating subtasks are allowed; the status change waits for a person.
+        const waiting = await settle(filed.key, ["needs_you"]);
+        expect(waiting.pendingApproval.summary).toContain(`${filed.key} → In Review`);
+        expect(foreman.mockJira.subtasks(filed.key)).toHaveLength(2);
+        expect(comments(filed.key)).toMatch(/Plan: two subtasks/);
+        await call("approvals.decide", { approvalId: waiting.pendingApproval.id, decision: "deny", reason: "leave the status to us" });
+        const done = await settle(filed.key, ["done"]);
+        const steps = (await call("runs.timeline", { runId: done.runId })).steps;
+        expect(steps.find((s: any) => s.title === "jira_transition")).toMatchObject({ status: "error", detail: expect.stringContaining("Permission denied") });
+        expect(steps.find((s: any) => s.title === "jira_get_issue").detail).toContain("Split the rework");
+
+        // An agent without the Jira tools switched on cannot use them.
+        const bare = (await call("agents.create", { name: "No Jira", spec: { policy: { autonomy: "full" }, mock: { scenario: "jira-updates" } } })).agent;
+        const run = await call("runs.start", { agentId: bare.id, prompt: `Plan ${filed.key}`, wait: true });
+        const refused = (await call("runs.timeline", { runId: run.id })).steps.filter((s: any) => s.kind === "tool");
+        expect(refused.every((s: any) => s.status === "error" && /not switched on/.test(s.detail))).toBe(true);
+        expect(foreman.mockJira.subtasks(filed.key)).toHaveLength(2);
+
+        const page = await (await fetch(`${base}/mock/jira/browse/${filed.key}`)).text();
+        expect(page).toContain("Subtasks");
+        expect((await call("system.agent_tools")).map((t: any) => t.name)).toContain("ask_for_info");
+
+        // Leave the shared server as the other suites expect it.
+        foreman.mockJira.requiredAuth = null;
+        await call("jira.configure", { auth: { type: "none" }, writeBack: { enabled: false } });
+        await foreman.work.settled();
     });
 });

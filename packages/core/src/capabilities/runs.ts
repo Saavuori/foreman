@@ -148,12 +148,13 @@ export const runCapabilities = [
     defineCapability({
         name: "approvals.decide",
         title: "Decide approval",
-        description: "Approve or deny a pending approval. The waiting run continues immediately with the decision.",
+        description: "Approve or deny a pending approval. The waiting run continues immediately with the decision. For a question (kind \"question\"), approve with the answer in `reason`; deny means no answer will come.",
         input: z.object({ approvalId: z.string(), decision: z.enum(["approve", "deny"]), reason: z.string().optional() }),
         handler: (ctx, { approvalId, decision, reason }) => {
             const approval = ctx.store.getApproval(approvalId);
             if (!approval) throw new CapabilityError(`Approval ${approvalId} not found`, "not_found");
             if (approval.status !== "pending") throw new CapabilityError(`Approval is already ${approval.status}`, "conflict");
+            if (approval.kind === "question" && decision === "approve" && !reason?.trim()) throw new CapabilityError("This is a question: put the answer in `reason`", "invalid_input");
             return ctx.engine.decideApproval(approvalId, decision === "approve", ctx.actor, reason);
         },
     }),

@@ -87,6 +87,21 @@ export function buildTimeline(events: RunEvent[]): TimelineStep[] {
                 steps.push(step);
                 break;
             }
+            case "foreman.question_asked": {
+                const step: TimelineStep = { ...base, kind: "approval", title: `Question: ${clip(d.question, 300)}`, status: "pending", data: { approvalId: d.approvalId, question: true } };
+                approvals.set(d.approvalId, step);
+                steps.push(step);
+                break;
+            }
+            case "foreman.question_answered": {
+                const step = approvals.get(d.approvalId);
+                if (step) {
+                    step.status = d.answered ? "ok" : "denied";
+                    step.detail = d.answered ? `Answer: ${clip(d.answer, 2000)}` : `No answer: ${d.reason}`;
+                    step.durationMs = Date.parse(e.ts) - Date.parse(step.ts);
+                }
+                break;
+            }
             case "foreman.approval_decided": {
                 const step = approvals.get(d.approvalId);
                 if (step) {

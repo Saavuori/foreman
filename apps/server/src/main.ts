@@ -26,6 +26,7 @@ const { app, foreman } = await buildApp({
     logger: process.env.FOREMAN_LOG === "1",
     runtimes: [new CopilotRuntime({ dataDir, gitHubToken: process.env.FOREMAN_GITHUB_TOKEN || undefined })],
     concurrency: Number(process.env.FOREMAN_CONCURRENCY ?? 4),
+    secretKey: process.env.FOREMAN_SECRET_KEY || undefined,
     memory: demo,
 });
 if (!demo) seedIfEmpty(foreman);
