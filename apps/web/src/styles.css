@@ -1729,19 +1729,44 @@ table.grid th.num {
     gap: 8px;
     margin-top: 14px;
 }
-.acard-actions a {
+.acard-actions a,
+.acard-actions button {
     padding: 5px 12px;
     border: 1px solid var(--line-strong);
     border-radius: 4px;
-    font-weight: 600;
-    font-size: 13px;
+    background: transparent;
+    font: 600 13px var(--body);
     color: #5b5fc7;
+    cursor: pointer;
 }
-.acard-actions a:hover {
+.acard-actions a:hover,
+.acard-actions button:hover:not(:disabled) {
     background: color-mix(in srgb, #5b5fc7 8%, transparent);
 }
+/* Teams draws a "positive" action filled in its own purple and a "destructive" one in red. */
+.acard-actions button.primary {
+    background: #5b5fc7;
+    border-color: #5b5fc7;
+    color: #fff;
+}
+.acard-actions button.primary:hover:not(:disabled) {
+    background: #4f52b2;
+}
+.acard-actions button.destructive {
+    color: var(--stop);
+}
+.acard-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+.acard-input {
+    margin-top: 12px;
+    width: 100%;
+    resize: vertical;
+}
 @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .acard-actions a {
+    :root:not([data-theme="light"]) .acard-actions a,
+    :root:not([data-theme="light"]) .acard-actions button:not(.primary):not(.destructive) {
         color: #a9acff;
     }
 }

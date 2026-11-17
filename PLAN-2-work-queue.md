@@ -282,7 +282,14 @@ is alive within seconds — for UI work, demos and end-to-end tests.
 | **C** | Notification engine, card templates, mock Teams + preview, in-app inbox, Workflows webhook channel | Every event in §5.1 produces a card in the preview; a real Teams channel receives them when a webhook URL is set |
 | **D** ✅ | Secrets vault, real Jira client (token auth), write-back, agent Jira tools, progress + ask-for-info tools | A real Jira ticket is picked up, commented on, transitioned and closed by a mock agent |
 | **E** ✅ | Batches, flow metrics, timeline view, digest | A 40-ticket batch shows progress and sends one summary |
-| **F** | Teams bot (interactive approvals), Jira webhook intake, BYOK spike | Approve from a Teams card; one real model-backed run end to end |
+| **F** ✅ | Teams bot (interactive approvals), Jira webhook intake, BYOK spike | Approve from a Teams card; one real model-backed run end to end |
+
+Slice F as built: the bot speaks the Bot Framework REST protocol itself and is proven against a
+mock Bot Framework (signed tokens, connector API) — no Entra registration has been used, so
+"Approve from a Teams card" is met in the mock Teams preview, not in a tenant. BYOK is a
+`provider` on the agent spec of the Copilot runtime (not a separate runtime); the real runtime
+runs end to end against Foreman's mock model endpoint, with no Copilot subscription. A real model
+provider and a public HTTPS address remain untried.
 
 A–C need nothing outside this machine. D needs a Jira site and token. F needs
 Microsoft Entra admin consent, a public HTTPS address, and a model API key.

@@ -5,21 +5,26 @@ The adapter that runs Foreman agents on the GitHub Copilot agent runtime through
 and [run-engine.md](../core/docs/run-engine.md) first — the adapter implements the
 `RuntimeAdapter` interface described there.
 
-## Status: never run live
+## Status: runs on your own model key, never on a Copilot subscription
 
-**No agent has ever executed through this adapter.** The maintainer's GitHub account has no
-Copilot subscription; requests are refused with HTTP 403. The code type-checks against the SDK
-and follows what a spike (`spike/`) established, nothing more.
+The maintainer's GitHub account has no Copilot subscription; Copilot-backed requests are refused
+with HTTP 403. But the runtime runs without one when the agent names its own model provider
+(`spec.provider`, "bring your own key"). A test in `apps/server/src/server.test.ts` ("runs the
+real Copilot runtime on a model endpoint of your own") and the demo's "Model-backed reader"
+agent run the real runtime against Foreman's mock model at `/mock/model/v1` (an
+OpenAI-compatible endpoint in `apps/server/src/app.ts`, replies built by `mockModelReply` in
+core). So a change here **can** be verified at run time — run that test (about 3–6 s; it starts
+the Copilot CLI). What remains unverified: a real model provider, and anything that needs a
+Copilot account (model routing with `auto`, built-in tools' names and permission requests).
 
-Consequences for anyone changing it:
-
-- You cannot verify a change here by running it. Verify by type-checking against the installed
-  SDK's `.d.ts` files in `node_modules/@github/copilot-sdk/dist`, and say plainly in your report
-  that it is unverified at run time.
-- Do not "fix" behaviour you only suspect. Prefer the smallest change that the types support.
 - Do not make this runtime the default. `simulated` is the default in `AgentSpec` on purpose.
+- The SDK bundles the runtime as a native binary (`@github/copilot-sdk-win32-x64` on this
+  machine). When a type is not enough, the generated RPC types in
+  `node_modules/@github/copilot-sdk/dist/generated/rpc.d.ts` describe what the runtime answers.
 
-## What the spike established
+## What the spikes established
+
+`spike/spike.mjs` (sign-in), `spike/byok.mjs` (own key), `spike/mcp-permissions.mjs` (MCP).
 
 - The client is created with `mode: "empty"`, so a session has **no tools unless the spec names
   them**. Empty mode requires `baseDirectory`; Foreman uses `<dataDir>/copilot-home`.
@@ -27,6 +32,22 @@ Consequences for anyone changing it:
   `AgentSpec.budget.maxAiCredits` has that minimum.
 - Being signed in to GitHub is not enough; `status()` also lists models to detect an account
   without Copilot access and reports the 403 in plain words.
+- With `provider` set, a session runs with **no Copilot access at all**: the runtime calls the
+  provider's `chat/completions` (non-streaming, since `streaming: false`), offers Foreman's
+  tools as functions, and reports `assistant.usage` with cost 0.
+- **The runtime adds its own `github-mcp-server`**, signed in as whoever is logged in on the
+  machine (the `gh` CLI user). Its read tools ran **without any permission request**, so past
+  Foreman's guardrails, and reached api.github.com. The adapter therefore always passes
+  `disabledMcpServers: ["github-mcp-server"]` (unless the spec defines a server of that name).
+  A test asserts no GitHub tool appears in the trace.
+- **An agent's own MCP servers are filtered out** when there is no Copilot account behind the
+  session: `session.rpc.mcp.list()` reports them under `filteredServers` with
+  `mcp3pEnabled: false` ("third-party MCP servers are policy-enabled"). So it is still unknown
+  whether the runtime asks permission before a *read-only* tool of a user's MCP server. Find out
+  before relying on MCP guardrails with a Copilot account (re-run `spike/mcp-permissions.mjs`).
+- A tool handler that **throws** reaches the model and the trace only as "Tool execution
+  failed". Foreman's tools therefore return `{ textResultForLlm, resultType: "failure" |
+  "denied", error }` so the reason (a denial by policy, Jira unreachable) is visible.
 
 ## How a spec becomes a session (`toSessionConfig`)
 
@@ -39,6 +60,8 @@ Consequences for anyone changing it:
 | `subAgents` | `customAgents` |
 | `budget.maxAiCredits` | `sessionLimits.maxAiCredits` |
 | `outputSchema` | `responseSchema` on the message |
+| `provider` (`type`, `baseUrl`, `wireApi`, `secretName`) | `provider`, with the key resolved from the vault here |
+| — | `disabledMcpServers: ["github-mcp-server"]`, always |
 
 `toSessionConfig` is exported so it can be tested without a Copilot account.
 
@@ -53,8 +76,10 @@ Consequences for anyone changing it:
    - `tools` → Foreman's own tools from `x.tools.available`, each defined with `defineTool` and
      `skipPermission: true`, because `x.tools.call` already runs the guardrail check. Do not
      remove `skipPermission` without also removing the check, or people are asked twice.
-4. Every session event is forwarded to `x.emit`, except streaming deltas (`SKIPPED_EVENTS`),
-   which would multiply the size of a trace without adding content.
+4. Every session event is forwarded to `x.emit`, except streaming deltas and the per-turn
+   message snapshots (`SKIPPED_EVENTS`), which would multiply the size of a trace without adding
+   content. A real session emits many more event types than the timeline shows (`model.*`,
+   `session.*`, `instruction.update` …); they are kept in the raw events.
 5. `sendAndWait` with `source: "automation-<kind>"`, so the runtime knows the prompt did not
    come from a person at a keyboard.
 6. On abort (cancel or timeout) the session is aborted; it is always disconnected at the end.
@@ -63,7 +88,8 @@ Consequences for anyone changing it:
 
 - **Every action is authorised.** Anything the runtime can do with a side effect must reach
   `x.authorize` — through `onPermissionRequest` or through `x.tools.call`. Never return
-  `approve-once` unconditionally, and never use the SDK's `approveAll`.
+  `approve-once` unconditionally, and never use the SDK's `approveAll`. Anything the runtime
+  brings that bypasses `onPermissionRequest` (its GitHub MCP server) stays disabled.
 - **Secrets are resolved late and never emitted.** Use `resolveSecrets` when building the
   session config, not earlier, and do not put the result in an event or a log line.
 - **Event names pass through unchanged.** `packages/core/src/timeline.ts` and the usage
@@ -84,6 +110,9 @@ document.
 
 ## Bring-your-own-key
 
-Running on a model API key instead of a Copilot subscription is planned as a spike (slice F in
-`PLAN-2-work-queue.md`) and is not started. It would be a second `RuntimeAdapter` in its own
-package, not a mode of this one.
+A mode of this adapter, not a separate runtime: `AgentSpec.provider` (`schemas.ts`) holds the
+provider `type` (`openai`, `azure`, `anthropic`), `baseUrl`, optional `wireApi` and the name of the
+vault secret with the key. `agents.create` / `agents.update` refuse `model: "auto"` with a
+provider, since only Copilot can route; the model must be the provider's own id. The key is
+resolved in `toSessionConfig` and never emitted. `secrets.list` shows the agent as a user of the
+secret ("model key").

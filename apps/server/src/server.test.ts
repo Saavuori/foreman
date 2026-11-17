@@ -1,6 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CopilotRuntime } from "@foreman/runtime-copilot";
 import { buildApp } from "./app.ts";
 
 const TOKEN = "test-token";
@@ -20,7 +24,7 @@ const tool = async (name: string, args: Record<string, unknown> = {}) => {
 };
 
 beforeAll(async () => {
-    const built = await buildApp({ dataDir: "", baseUrl: "http://test", memory: true, simulatedStepDelayMs: 0, token: TOKEN, notifyRetryDelaysMs: [5, 5] });
+    const built = await buildApp({ dataDir: "", baseUrl: "http://test", memory: true, simulatedStepDelayMs: 0, token: TOKEN, notifyRetryDelaysMs: [5, 5], runtimes: [new CopilotRuntime({ dataDir: mkdtempSync(join(tmpdir(), "foreman-test-")) })] });
     const { app } = built;
     foreman = built.foreman;
     foreman.start();
@@ -471,5 +475,158 @@ describe("batches and flow", () => {
         expect(lane.runs[0]).toMatchObject({ kind: "work", key: expect.stringMatching(/^BAT-/) });
         const asker = timeline.lanes.find((l: any) => l.agentName === "Asker");
         expect(asker.runs[0].waits).toHaveLength(1);
+    });
+});
+
+describe("webhook intake and your own model key", () => {
+    const call = async (name: string, input: unknown = {}) => {
+        const res = await rpc(name, input);
+        if (res.status !== 200) throw new Error(`${name} → ${res.status}: ${res.body.error}`);
+        return res.body.result;
+    };
+    const waitFor = async (check: () => Promise<boolean> | boolean, ms = 15000) => {
+        const until = Date.now() + ms;
+        while (!(await check())) {
+            if (Date.now() > until) throw new Error("timed out waiting");
+            await new Promise((r) => setTimeout(r, 25));
+        }
+    };
+
+    it("picks a ticket up the moment Jira's webhook fires", async () => {
+        // Polling is effectively off (an hour), so only the webhook can bring the ticket in.
+        await call("jira.configure", { baseUrl: `${base}/mock/jira`, enabled: true, pollSeconds: 3600, jql: "labels = foreman AND status != Done" });
+        const hook = await call("jira.webhook");
+        const url = hook.url.replace("http://test", base);
+        expect((await fetch(url.slice(0, -4) + "nope", { method: "POST" })).status).toBe(404);
+
+        const filed = await call("mockjira.create_issue", { summary: "Arrives by webhook", project: "HOOK" });
+        expect((await rpc("work.get", { itemId: filed.key })).status).toBe(404);
+        const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ webhookEvent: "jira:issue_created", issue: { key: "EVIL-1" } }) });
+        expect(res.status).toBe(202);
+        await waitFor(async () => (await rpc("work.get", { itemId: filed.key })).status === 200);
+        // The body named a ticket outside the filter; it is ignored.
+        expect((await rpc("work.get", { itemId: "EVIL-1" })).status).toBe(404);
+        expect((await call("jira.webhook")).received).toBeGreaterThanOrEqual(1);
+
+        // The mock Jira can call the webhook itself, as a real site would.
+        expect((await call("mockjira.webhooks", { enabled: true })).enabled).toBe(true);
+        foreman.mockJira.webhookUrl = url; // the test server is not reachable at its configured public address
+        const second = await call("mockjira.create_issue", { summary: "Arrives on its own", project: "HOOK" });
+        await waitFor(async () => (await rpc("work.get", { itemId: second.key })).status === 200);
+
+        // A new address replaces the old one.
+        const rotated = await call("jira.rotate_webhook");
+        expect(rotated.url).not.toBe(hook.url);
+        expect((await fetch(url, { method: "POST" })).status).toBe(404);
+        await call("mockjira.webhooks", { enabled: false });
+        await call("jira.configure", { enabled: false });
+    }, 30_000);
+
+    it("runs the real Copilot runtime on a model endpoint of your own, behind the guardrails", async () => {
+        const spec = { runtime: "copilot", model: "gpt-4o", provider: { type: "openai", baseUrl: `${base}/mock/model/v1` }, tools: ["jira_get_issue", "jira_add_comment"], policy: { autonomy: "act", rules: [{ match: "jira_add_comment", action: "deny" }] } };
+        await call("jira.configure", { baseUrl: `${base}/mock/jira` });
+        expect((await rpc("agents.create", { name: "No model named", spec: { ...spec, model: "auto" } })).status).toBe(400);
+        const agent = (await call("agents.create", { name: "Own key", spec })).agent;
+        const run = await call("runs.start", { agentId: agent.id, prompt: "Look at PAY-181 and note what you find.", waitSeconds: 90 });
+        expect(run.error).toBeNull();
+        expect(run.status).toBe("succeeded");
+        expect(run.output).toContain("Mock model finished");
+        expect(run.usage.modelCalls).toBeGreaterThanOrEqual(2);
+
+        const steps = (await call("runs.timeline", { runId: run.id })).steps;
+        // The runtime's own GitHub MCP server would act as this machine's GitHub user with no guardrail.
+        expect(steps.some((s: any) => s.kind === "tool" && /github/i.test(s.title))).toBe(false);
+        // The read was allowed and really reached (mock) Jira; the comment was stopped by the guardrail.
+        expect(steps.find((s: any) => s.kind === "tool" && s.title === "jira_get_issue")).toMatchObject({ status: "ok", detail: expect.stringContaining("Partial refund") });
+        expect(steps.find((s: any) => s.kind === "tool" && s.title === "jira_add_comment").status).toBe("error");
+        expect(steps.some((s: any) => s.kind === "policy" && /Denied/.test(s.title))).toBe(true);
+        expect(foreman.mockJira.get("PAY-181")!.fields.comment.comments).toHaveLength(0);
+    }, 120_000);
+});
+
+describe("Teams bot", () => {
+    const call = async (name: string, input: unknown = {}) => {
+        const res = await rpc(name, input);
+        if (res.status !== 200) throw new Error(`${name} → ${res.status}: ${res.body.error}`);
+        return res.body.result;
+    };
+    const waitFor = async <T>(fn: () => Promise<T | undefined | false>, ms = 8000): Promise<T> => {
+        const until = Date.now() + ms;
+        for (;;) {
+            const value = await fn();
+            if (value) return value;
+            if (Date.now() > until) throw new Error("timed out waiting");
+            await new Promise((r) => setTimeout(r, 25));
+        }
+    };
+    const card = (message: any) => message.payload.attachments[0].content;
+    const botCard = (conversationId: string, text: string) => waitFor(async () => (await call("mockteams.messages", { channelId: conversationId })).find((m: any) => m.via === "bot" && JSON.stringify(m.payload).includes(text)));
+
+    it("checks every message Teams sends and will not turn on half set up", async () => {
+        expect((await rpc("teamsbot.configure", { enabled: true })).status).toBe(400);
+        // The test server is not at http://test; the mock has to call it where it really listens.
+        foreman.mockBot.serverUrl = base;
+        await call("teamsbot.configure", { enabled: true, mock: true });
+        const post = (authorization?: string) =>
+            fetch(`${base}/hooks/teams/messages`, { method: "POST", headers: { "content-type": "application/json", ...(authorization ? { authorization } : {}) }, body: JSON.stringify({ type: "conversationUpdate", serviceUrl: "https://evil.example/", conversation: { id: "19:evil" } }) });
+        expect((await post()).status).toBe(401);
+        expect((await post("Bearer e30.e30.c2ln")).status).toBe(401);
+        // An unverified message never becomes a place the bot sends its token to.
+        expect((await call("teamsbot.status")).conversations).toHaveLength(0);
+    });
+
+    it("approves, denies and answers from a card, as the Teams user", async () => {
+        const conversation = await call("mockteams.install", { team: "Payments", channel: "Approvals" });
+        expect((await call("teamsbot.status")).conversations.map((c: any) => c.name)).toContain("Payments › Approvals");
+        const channel = await call("channels.create", { name: "Payments approvals", kind: "teams_bot", conversationId: conversation.id });
+        expect(channel.address).toBe("Bot · Payments › Approvals");
+        await call("notifyrules.create", { name: "Decide in Teams", events: ["approval_needed", "question_asked"], channelId: channel.id });
+
+        const pusher = (await call("agents.create", { name: "Bot pusher", spec: { policy: { autonomy: "act" }, mock: { scenario: "needs-approval" } } })).agent;
+        const run = await call("runs.start", { agentId: pusher.id, prompt: "Ship it", waitSeconds: 10 });
+        expect(run.status).toBe("waiting_approval");
+        const message = await botCard(conversation.id, "Bot pusher");
+        expect(card(message).actions.map((a: any) => a.title)).toEqual(["Approve", "Deny", "Open in Foreman"]);
+
+        // Someone who is not on the approver list is turned away and the card stays as it is.
+        await call("teamsbot.configure", { approvers: ["11111111-2222-3333-4444-555555555555"] });
+        expect(await call("mockteams.press", { messageId: message.id, verb: "approve" })).toMatchObject({ updated: false, message: expect.stringContaining("not on Foreman's list") });
+        await call("teamsbot.configure", { approvers: [] });
+
+        expect(await call("mockteams.press", { messageId: message.id, verb: "approve", userName: "Megan Bowen" })).toEqual({ updated: true });
+        await waitFor(async () => (await call("runs.get", { runId: run.id })).run.status === "succeeded");
+        const [approval] = await call("approvals.list", { runId: run.id, status: "approved" });
+        expect(approval.decidedBy).toMatch(/^teams:Megan Bowen · /);
+        expect((await call("audit.list", { limit: 50 })).some((e: any) => e.capability === "approvals.decide" && e.actor.startsWith("teams:Megan Bowen"))).toBe(true);
+        const decided = card((await call("mockteams.messages", { channelId: conversation.id })).find((m: any) => m.id === message.id));
+        expect(JSON.stringify(decided)).toContain("Approved by Megan Bowen");
+        expect(decided.actions.some((a: any) => a.type === "Action.Execute")).toBe(false);
+        expect((await rpc("mockteams.press", { messageId: message.id, verb: "deny" })).status).toBe(409);
+        // The press carried no channel name; the one learned at install is kept.
+        expect((await call("teamsbot.status")).conversations.find((c: any) => c.id === conversation.id).name).toBe("Payments › Approvals");
+
+        // Decided in Foreman instead: the card in Teams is updated to match.
+        const second = await call("runs.start", { agentId: pusher.id, prompt: "Ship it again", waitSeconds: 10 });
+        const [pending] = await call("approvals.list", { runId: second.id });
+        const other = await waitFor(async () => (await call("mockteams.messages", { channelId: conversation.id })).find((m: any) => m.id !== message.id && JSON.stringify(m.payload).includes("Approve") && m.ts >= approval.decidedAt));
+        await call("approvals.decide", { approvalId: pending.id, decision: "deny" });
+        await waitFor(async () => JSON.stringify((await call("mockteams.messages", { channelId: conversation.id })).find((m: any) => m.id === other.id).payload).includes("Denied by someone in Foreman"));
+
+        // A question gets an answer box; the answer reaches the waiting agent.
+        const asker = (await call("agents.create", { name: "Bot asker", spec: { policy: { autonomy: "act" }, mock: { scenario: "asks-question" } } })).agent;
+        const asked = await call("runs.start", { agentId: asker.id, prompt: "Settle the rounding rule", waitSeconds: 10 });
+        expect(asked.status).toBe("waiting_approval");
+        const question = await botCard(conversation.id, "Bot asker");
+        expect(card(question).body.some((el: any) => el.type === "Input.Text")).toBe(true);
+        expect(await call("mockteams.press", { messageId: question.id, verb: "answer", answer: "  " })).toMatchObject({ updated: false, message: "Write an answer first." });
+        expect(await call("mockteams.press", { messageId: question.id, verb: "answer", answer: "half-even", userName: "Megan Bowen" })).toEqual({ updated: true });
+        const answered = await waitFor(async () => {
+            const r = (await call("runs.get", { runId: asked.id })).run;
+            return r.status === "succeeded" ? r : undefined;
+        });
+        expect(answered.output).toContain("half-even");
+
+        await call("channels.delete", { channelId: channel.id });
+        await call("teamsbot.configure", { enabled: false });
     });
 });

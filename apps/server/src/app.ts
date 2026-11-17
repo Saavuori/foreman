@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
-import { AgentSpec, CapabilityError, createForeman, plainText, type Actor, type ForemanOptions } from "@foreman/core";
+import { AgentSpec, CapabilityError, createForeman, mockModelReply, plainText, type Actor, type ForemanOptions } from "@foreman/core";
 import { createMcpServer } from "./mcp.ts";
 
 export interface AppOptions extends ForemanOptions {
@@ -66,6 +66,53 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
         if (!trigger || trigger.config.kind !== "webhook" || !safeEqual(trigger.secret, req.params.secret)) return reply.code(404).send({ error: "Unknown webhook" });
         const result = triggers.fire(trigger.id, req.body ?? {}, "webhook");
         return result.fired ? reply.code(202).send({ accepted: true, runId: result.run.id }) : reply.code(409).send({ accepted: false, reason: result.reason });
+    });
+
+    // ── Jira webhook: authenticated by the secret in the path. The body is ignored on purpose. ──
+    app.post<{ Params: { secret: string } }>("/hooks/jira/:secret", async (req, reply) => {
+        if (!safeEqual(req.params.secret, foreman.work.webhookSecret())) return reply.code(404).send({ error: "Unknown webhook" });
+        return reply.code(202).send(foreman.work.nudge());
+    });
+
+    // ── Teams bot messaging endpoint: authenticated by the Bot Framework's signed token, checked in core ──
+    app.post("/hooks/teams/messages", async (req, reply) => {
+        const { status, body } = await foreman.bot.receive(req.headers.authorization, (req.body ?? {}) as any);
+        return reply.code(status).send(body);
+    });
+
+    // ── Mock Bot Framework (unauthenticated discovery, like Microsoft's; the connector checks its own tokens) ──
+    const { mockBot } = foreman;
+    app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_req, body, done) => done(null, Object.fromEntries(new URLSearchParams(String(body)))));
+    app.get("/mock/botframework/openid", async () => mockBot.openIdDocument());
+    app.get("/mock/botframework/keys", async () => mockBot.keys());
+    app.post<{ Body: Record<string, string> }>("/mock/botframework/login/:tenant/oauth2/v2.0/token", async (req, reply) => {
+        const token = mockBot.issueToken(req.body?.client_id ?? "", req.body?.client_secret ?? "");
+        return token ?? reply.code(401).send({ error: "invalid_client", error_description: "Mock Bot Framework: wrong app ID or client secret" });
+    });
+    app.post<{ Params: { conversation: string } }>("/mock/botframework/v3/conversations/:conversation/activities", async (req, reply) => {
+        if (!mockBot.authorised(req.headers.authorization)) return reply.code(401).send({ error: { code: "Unauthorized", message: "Mock Bot Framework: missing or unknown token" } });
+        return mockBot.receive(req.params.conversation, req.body);
+    });
+    app.put<{ Params: { conversation: string; id: string } }>("/mock/botframework/v3/conversations/:conversation/activities/:id", async (req, reply) => {
+        if (!mockBot.authorised(req.headers.authorization)) return reply.code(401).send({ error: { code: "Unauthorized", message: "Mock Bot Framework: missing or unknown token" } });
+        return mockBot.receive(req.params.conversation, req.body, req.params.id) ?? reply.code(404).send({ error: { code: "NotFound", message: "No such message" } });
+    });
+
+    // ── Mock model: an OpenAI-compatible endpoint that needs no key (unauthenticated, like the other mocks) ──
+    app.post("/mock/model/v1/chat/completions", async (req, reply) => {
+        const body = (req.body ?? {}) as { model?: string; messages?: unknown[]; stream?: boolean };
+        const { message, finish } = mockModelReply(body);
+        const base = { id: "chatcmpl-mock", created: Math.floor(Date.now() / 1000), model: body.model ?? "mock" };
+        const prompt = Math.round(200 + JSON.stringify(body.messages ?? []).length / 4);
+        const usage = { prompt_tokens: prompt, completion_tokens: 20, total_tokens: prompt + 20 };
+        if (!body.stream) return { ...base, object: "chat.completion", choices: [{ index: 0, message, finish_reason: finish }], usage };
+        const calls = message.tool_calls as any[] | undefined;
+        const delta = calls ? { role: "assistant", tool_calls: calls.map((c, index) => ({ index, ...c })) } : message;
+        reply.raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+        reply.raw.write(`data: ${JSON.stringify({ ...base, object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+        reply.raw.write(`data: ${JSON.stringify({ ...base, object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: finish }], usage })}\n\n`);
+        reply.raw.end("data: [DONE]\n\n");
+        return reply.hijack();
     });
 
     // ── Mock Jira: the REST shapes of Jira Cloud, backed by memory ─────────

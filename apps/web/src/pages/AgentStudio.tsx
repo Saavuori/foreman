@@ -107,6 +107,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
     const runs = useRpc<any[]>("runs.list", { agentId, limit: 8 }, ["run"]);
     const models = useRpc<any[]>("system.models", {}, []);
     const ownTools = useRpc<any[]>("system.agent_tools", {}, []);
+    const secrets = useRpc<any>("secrets.list", {}, ["audit"]);
     const { busy, run: act } = useAction();
 
     const saved = detail.data?.revision;
@@ -138,7 +139,8 @@ export function AgentStudio({ agentId }: { agentId: string }) {
     const ownNames = new Set((ownTools.data ?? []).map((t) => t.name));
     const toggleTool = (tool: string) => set({ tools: spec.tools.includes(tool) ? spec.tools.filter((t) => t !== tool) : [...spec.tools, tool] });
     const setRule = (i: number, patch: Partial<PolicyRule>) => setPolicy({ rules: spec.policy.rules.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
-    const patchOf = (s: AgentSpec) => ({ ...s, outputSchema: s.outputSchema ?? null, reasoningEffort: s.reasoningEffort ?? null });
+    const patchOf = (s: AgentSpec) => ({ ...s, outputSchema: s.outputSchema ?? null, reasoningEffort: s.reasoningEffort ?? null, provider: s.provider ?? null });
+    const setProvider = (patch: Partial<NonNullable<AgentSpec["provider"]>>) => set({ provider: { type: "openai", baseUrl: "", secretName: "", ...spec.provider, ...patch } });
     const modelIds = (models.data ?? []).find((m) => m.runtime === spec.runtime)?.models ?? [];
 
     const save = () =>
@@ -193,7 +195,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                                     <Segmented label="Runtime" value={spec.runtime} onChange={(runtime) => set({ runtime })} options={[{ value: "simulated", label: "Simulator" }, { value: "copilot", label: "Copilot" }]} />
                                     <span className="hint">{spec.runtime === "simulated" ? "Synthetic output, no model calls." : "GitHub Copilot agent runtime."}</span>
                                 </div>
-                                <Field label="Model" hint={modelIds.length ? "“auto” lets Copilot route." : "Type a model id, or “auto”."}>
+                                <Field label="Model" hint={spec.provider ? "The provider's own model id, e.g. gpt-4o." : modelIds.length ? "“auto” lets Copilot route." : "Type a model id, or “auto”."}>
                                     <input className="input code" list="models" value={spec.model} onChange={(e) => set({ model: e.target.value })} />
                                     <datalist id="models">
                                         <option value="auto" />
@@ -213,6 +215,40 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                                     </select>
                                 </Field>
                             </div>
+                            {spec.runtime === "copilot" ? (
+                                <div className="stack" style={{ marginTop: 14 }}>
+                                    <label className="row" style={{ gap: 8 }}>
+                                        <input type="checkbox" checked={!!spec.provider} onChange={(e) => set({ provider: e.target.checked ? { type: "openai", baseUrl: "", secretName: "" } : undefined, model: e.target.checked && spec.model === "auto" ? "" : spec.model })} />
+                                        <span>Use my own model key instead of a Copilot subscription</span>
+                                    </label>
+                                    {spec.provider ? (
+                                        <>
+                                            <div className="field">
+                                                <span className="label">Provider</span>
+                                                <Segmented label="Provider" value={spec.provider.type} onChange={(type) => setProvider({ type })} options={[{ value: "openai", label: "OpenAI-compatible" }, { value: "azure", label: "Azure OpenAI" }, { value: "anthropic", label: "Anthropic" }]} />
+                                            </div>
+                                            <div className="cols" style={{ gridTemplateColumns: "minmax(0, 3fr) minmax(0, 2fr)" }}>
+                                                <Field label="Endpoint" hint="The API's base address, e.g. https://api.openai.com/v1.">
+                                                    <input className="input code" type="url" value={spec.provider.baseUrl} onChange={(e) => setProvider({ baseUrl: e.target.value })} placeholder="https://…" />
+                                                </Field>
+                                                <Field label="API key" hint={<>A stored secret; values are added under <a href="#/secrets">Secrets</a>. Leave empty for an endpoint without a key.</>}>
+                                                    <select className="input" value={spec.provider.secretName} onChange={(e) => setProvider({ secretName: e.target.value })}>
+                                                        <option value="">No key</option>
+                                                        {(secrets.data?.secrets ?? []).map((s: any) => (
+                                                            <option key={s.name} value={s.name}>
+                                                                {s.name}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </Field>
+                                            </div>
+                                            <span className="hint">
+                                                The Copilot runtime then talks to this provider directly. Agents' own MCP servers are not started in this mode (the runtime allows them only with a Copilot account); Foreman's tools still work. For a try-out without a key, use the built-in mock endpoint <code className="mono">{location.origin}/mock/model/v1</code>.
+                                            </span>
+                                        </>
+                                    ) : null}
+                                </div>
+                            ) : null}
                         </section>
 
                         {spec.runtime === "simulated" ? (

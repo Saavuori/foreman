@@ -2,8 +2,16 @@ import { z } from "zod";
 import { ChannelKind, EVENT_KINDS, EventKind, maskUrl, NotifySettings, Severity, toAdaptiveCard, type Channel, type NotifyEvent } from "../notify.ts";
 import { CapabilityError, defineCapability, actorLabel, type Ctx } from "../registry.ts";
 
-/** Channels are listed without their posting address, which is a secret. */
-const present = (c: Channel) => ({ id: c.id, name: c.name, kind: c.kind, enabled: c.enabled, address: c.kind === "mock_teams" ? "Built-in preview" : maskUrl(c.webhookUrl), createdAt: c.createdAt });
+/** Channels are listed without their posting address, which is a secret. A bot channel shows the Teams conversation instead. */
+const present = (ctx: Ctx) => (c: Channel) => ({
+    id: c.id,
+    name: c.name,
+    kind: c.kind,
+    enabled: c.enabled,
+    address: c.kind === "mock_teams" ? "Built-in preview" : c.kind === "teams_bot" ? `Bot · ${ctx.bot.getConversation(c.webhookUrl)?.name ?? "conversation no longer known"}` : maskUrl(c.webhookUrl),
+    conversationId: c.kind === "teams_bot" ? c.webhookUrl : undefined,
+    createdAt: c.createdAt,
+});
 
 function requireChannel(ctx: Ctx, channelId: string): Channel {
     const channel = ctx.notify.getChannel(channelId);
@@ -11,7 +19,7 @@ function requireChannel(ctx: Ctx, channelId: string): Channel {
     return channel;
 }
 function checkUrl(kind: string, url: string | undefined) {
-    if (kind === "mock_teams") return;
+    if (kind === "mock_teams" || kind === "teams_bot") return;
     if (!url || !/^https?:\/\//i.test(url)) throw new CapabilityError("A webhook address starting with http:// or https:// is required", "invalid_input");
 }
 
@@ -118,17 +126,21 @@ export const notifyCapabilities = [
         description: "Places notifications can be sent: Teams channels (through a Workflows webhook), the built-in Teams preview, or a generic webhook. Posting addresses are masked.",
         readOnly: true,
         input: z.object({}),
-        handler: (ctx) => ctx.notify.listChannels().map(present),
+        handler: (ctx) => ctx.notify.listChannels().map(present(ctx)),
     }),
     defineCapability({
         name: "channels.create",
         title: "Add a channel",
         description:
-            "Add a destination. kind \"teams\": paste the address from a Teams Workflows flow using the trigger \"When a Teams webhook request is received\". kind \"mock_teams\": a built-in preview that needs no address. kind \"webhook\": plain JSON to any URL. A channel receives nothing until a rule points at it.",
-        input: z.object({ name: z.string().min(1).max(80), kind: ChannelKind, webhookUrl: z.string().optional(), enabled: z.boolean().default(true) }),
-        handler: (ctx, input) => {
+            "Add a destination. kind \"teams\": paste the address from a Teams Workflows flow using the trigger \"When a Teams webhook request is received\" (cards with links only). kind \"teams_bot\": a Teams conversation the Foreman bot has been added to, given as conversationId from teamsbot.status; its cards have working Approve / Deny / answer buttons. kind \"mock_teams\": a built-in preview that needs no address. kind \"webhook\": plain JSON to any URL. A channel receives nothing until a rule points at it.",
+        input: z.object({ name: z.string().min(1).max(80), kind: ChannelKind, webhookUrl: z.string().optional(), conversationId: z.string().optional(), enabled: z.boolean().default(true) }),
+        handler: (ctx, { conversationId, ...input }) => {
+            if (input.kind === "teams_bot") {
+                if (!conversationId || !ctx.bot.getConversation(conversationId)) throw new CapabilityError("Choose a Teams conversation the bot has been added to (see teamsbot.status)", "invalid_input");
+                return present(ctx)(ctx.notify.createChannel({ ...input, webhookUrl: conversationId }));
+            }
             checkUrl(input.kind, input.webhookUrl);
-            return present(ctx.notify.createChannel(input));
+            return present(ctx)(ctx.notify.createChannel(input));
         },
     }),
     defineCapability({
@@ -138,8 +150,11 @@ export const notifyCapabilities = [
         input: z.object({ channelId: z.string(), name: z.string().min(1).max(80).optional(), webhookUrl: z.string().optional(), enabled: z.boolean().optional() }),
         handler: (ctx, { channelId, ...patch }) => {
             const channel = requireChannel(ctx, channelId);
-            if (patch.webhookUrl !== undefined) checkUrl(channel.kind, patch.webhookUrl);
-            return present(ctx.notify.updateChannel(channelId, patch));
+            if (patch.webhookUrl !== undefined) {
+                if (channel.kind === "teams_bot") throw new CapabilityError("A bot channel's conversation cannot be changed; add a new channel instead", "invalid_input");
+                checkUrl(channel.kind, patch.webhookUrl);
+            }
+            return present(ctx)(ctx.notify.updateChannel(channelId, patch));
         },
     }),
     defineCapability({

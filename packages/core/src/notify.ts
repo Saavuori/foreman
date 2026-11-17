@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Bus } from "./registry.ts";
 import type { Approval, Run, WorkItem, WorkState } from "./schemas.ts";
 import type { Store } from "./store.ts";
+import type { TeamsBot } from "./teamsbot.ts";
 import type { Vault } from "./vault.ts";
 
 // ── Model ──────────────────────────────────────────────────────────────────
@@ -42,9 +43,11 @@ export interface NotifyEvent {
     dedupeKey: string;
     agentId?: string;
     project?: string;
+    /** Set when a person can decide right in the message: Approve / Deny, or answer a question. */
+    decision?: { approvalId: string; question: boolean };
 }
 
-export const ChannelKind = z.enum(["teams", "mock_teams", "webhook"]);
+export const ChannelKind = z.enum(["teams", "teams_bot", "mock_teams", "webhook"]);
 export type ChannelKind = z.infer<typeof ChannelKind>;
 export interface Channel {
     id: string;
@@ -103,8 +106,23 @@ export type NotifySettings = z.infer<typeof NotifySettings>;
 
 const COLOR: Record<Severity, string> = { info: "Accent", success: "Good", warning: "Warning", error: "Attention" };
 
-/** An Adaptive Card (schema 1.4, which Teams renders everywhere) for an event. */
-export function toAdaptiveCard(event: NotifyEvent) {
+/**
+ * An Adaptive Card (schema 1.4, which Teams renders everywhere) for an event. `interactive` adds
+ * Approve / Deny or an answer box; only the bot can receive those presses, so a Workflows webhook
+ * card stays links-only.
+ */
+export function toAdaptiveCard(event: NotifyEvent, options: { interactive?: boolean } = {}) {
+    const decision = options.interactive ? event.decision : undefined;
+    const data = { approvalId: decision?.approvalId };
+    const inputs = decision?.question ? [{ type: "Input.Text", id: "answer", isMultiline: true, placeholder: "Your answer", spacing: "Medium" }] : [];
+    const buttons = !decision
+        ? []
+        : decision.question
+          ? [{ type: "Action.Execute", title: "Send answer", verb: "answer", data, style: "positive" }]
+          : [
+                { type: "Action.Execute", title: "Approve", verb: "approve", data, style: "positive" },
+                { type: "Action.Execute", title: "Deny", verb: "deny", data, style: "destructive" },
+            ];
     return {
         type: "AdaptiveCard",
         $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
@@ -115,8 +133,10 @@ export function toAdaptiveCard(event: NotifyEvent) {
             { type: "TextBlock", text: event.title, size: "Medium", weight: "Bolder", wrap: true, spacing: "Small" },
             ...(event.text ? [{ type: "TextBlock", text: event.text, wrap: true, spacing: "Small" }] : []),
             ...(event.facts.length ? [{ type: "FactSet", spacing: "Medium", facts: event.facts.map(([title, value]) => ({ title, value })) }] : []),
+            ...inputs,
         ],
-        actions: event.links.map((link) => ({ type: "Action.OpenUrl", title: link.title, url: link.url })),
+        // With buttons in the card, the first link is no longer the place to decide, just to look.
+        actions: [...buttons, ...event.links.map((link, i) => ({ type: "Action.OpenUrl", title: decision && i === 0 ? "Open in Foreman" : link.title, url: link.url }))],
     };
 }
 
@@ -134,17 +154,32 @@ export interface MockTeamsMessage {
     ts: string;
     channel: string;
     payload: unknown;
+    /** "workflows" for webhook posts, "bot" for messages from the Teams bot (whose buttons work). */
+    via: "workflows" | "bot";
+    updatedAt?: string;
 }
 /** A stand-in for a Teams channel: keeps what was posted so the cards can be previewed. */
 export class MockTeams {
     private messages: MockTeamsMessage[] = [];
     constructor(private onChange: () => void = () => {}) {}
-    post(channel: string, payload: unknown): MockTeamsMessage {
-        const message = { id: randomUUID().slice(0, 8), ts: new Date().toISOString(), channel, payload };
+    post(channel: string, payload: unknown, via: MockTeamsMessage["via"] = "workflows"): MockTeamsMessage {
+        const message: MockTeamsMessage = { id: randomUUID().slice(0, 8), ts: new Date().toISOString(), channel, payload, via };
         this.messages.push(message);
         if (this.messages.length > 300) this.messages.shift();
         this.onChange();
         return message;
+    }
+    get(id: string): MockTeamsMessage | undefined {
+        return this.messages.find((m) => m.id === id);
+    }
+    /** Replace a message in place, as Teams does when a bot updates its card. */
+    update(id: string, payload: unknown): boolean {
+        const message = this.get(id);
+        if (!message) return false;
+        message.payload = payload;
+        message.updatedAt = new Date().toISOString();
+        this.onChange();
+        return true;
     }
     list(channel?: string, limit = 100): MockTeamsMessage[] {
         return this.messages.filter((m) => !channel || m.channel === channel).slice(-limit).reverse();
@@ -191,6 +226,7 @@ export class NotifyHub {
     private pending = new Set<Promise<unknown>>();
     private retryDelays: number[];
     private doFetch: typeof fetch;
+    private bot?: TeamsBot;
 
     constructor(
         private store: Store,
@@ -255,6 +291,7 @@ export class NotifyHub {
                 dedupeKey: `approval:${approval.id}`,
                 agentId: approval.agentId,
                 project: item?.ticket.project,
+                decision: { approvalId: approval.id, question: true },
             });
         }
         this.emit({
@@ -268,6 +305,7 @@ export class NotifyHub {
             dedupeKey: `approval:${approval.id}`,
             agentId: approval.agentId,
             project: item?.ticket.project,
+            decision: { approvalId: approval.id, question: false },
         });
     };
 
@@ -432,8 +470,18 @@ export class NotifyHub {
         return this.getDelivery(deliveryId)!;
     }
 
+    /** The bot is built after the hub, because it stores its messages in the hub's Teams preview. */
+    setBot(bot: TeamsBot) {
+        this.bot = bot;
+    }
+
     private async post(channel: Channel, event: NotifyEvent) {
         if (channel.kind === "mock_teams") return void this.mockTeams.post(channel.id, toTeamsPayload(event));
+        // For a bot channel the stored "address" is the Teams conversation id.
+        if (channel.kind === "teams_bot") {
+            if (!this.bot) throw new Error("The Teams bot is not available on this server");
+            return this.bot.post(channel.webhookUrl, event);
+        }
         const body = channel.kind === "teams" ? toTeamsPayload(event) : toWebhookPayload(event);
         if (!channel.webhookUrl) throw new Error("The channel has no usable address — enter it again");
         let response: Response;

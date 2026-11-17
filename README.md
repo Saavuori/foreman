@@ -85,19 +85,34 @@ all land in the in-app **inbox**. Rules decide which of them also go to a **chan
 
 - **Teams** — paste the address of a Teams *Workflows* webhook ("When a Teams webhook request is
   received"). Foreman posts Adaptive Cards with buttons that open Foreman and Jira.
+- **Teams bot** — with an Azure Bot registration, approvals and questions arrive as cards with
+  working **Approve**, **Deny** and answer buttons. A press is checked against Microsoft's signed
+  token, decided as that Teams user (and audited so), and the card updates in place — also when
+  the decision is made in Foreman instead. An optional list of approvers limits who may decide.
 - **Teams preview** — a built-in stand-in that renders the same cards, so rules and card design can
-  be tested without a tenant.
+  be tested without a tenant. With the bot in mock mode, its buttons work here too, through the
+  same signed path as real Teams.
 - **Webhook** — plain JSON to any URL.
 
 Every delivery is logged with its result; failures are retried twice.
+
+Jira can also call Foreman: give Jira the address under Work → Routing & intake → Instant pickup
+as a webhook, and new tickets are picked up at once instead of at the next check.
 
 ## No Copilot subscription needed
 
 New agents use the **mock runtime**: scripted scenarios (clean success, stops for approval, tool
 failure, flaky, timeout, over budget, sub-agents, wrong result shape) that go through the real
 guardrails, approvals, budgets and traces. Pick a scenario per agent in the studio, or put
-`[mock:name]` in a prompt. Switch an agent's runtime to `copilot` once Copilot access exists —
-that adapter type-checks against the SDK but has not yet completed a live run.
+`[mock:name]` in a prompt.
+
+Or **bring your own key**: an agent on the `copilot` runtime can name its own model provider
+(OpenAI-compatible, Azure OpenAI or Anthropic), endpoint and a stored API key, and then runs on the
+real Copilot agent runtime with no Copilot subscription. Foreman's tools and guardrails work as
+usual; the agent's own MCP servers do not load in this mode (the runtime allows them only with a
+Copilot account). The built-in endpoint `/mock/model/v1` stands in for a provider, so this path
+runs here without any key — the demo's "Model-backed reader" uses it. No real provider has been
+tried yet, and runs on a Copilot subscription have not been tried at all.
 
 ## Working on the code
 

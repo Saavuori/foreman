@@ -12,14 +12,14 @@ Read this file first, then the guide for the part you are changing:
 | A capability (API / MCP tool) | [packages/core/docs/capabilities.md](packages/core/docs/capabilities.md) |
 | Runs, guardrails, approvals, the mock runtime, agent tools | [packages/core/docs/run-engine.md](packages/core/docs/run-engine.md) |
 | Work queue, routing, Jira, batches, flow metrics | [packages/core/docs/work-queue.md](packages/core/docs/work-queue.md) |
-| Notifications, Teams cards | [packages/core/docs/notifications.md](packages/core/docs/notifications.md) |
+| Notifications, Teams cards, the Teams bot | [packages/core/docs/notifications.md](packages/core/docs/notifications.md) |
 | Secrets vault, redaction | [packages/core/docs/secrets.md](packages/core/docs/secrets.md) |
 | The Copilot SDK adapter | [packages/runtime-copilot/AGENTS.md](packages/runtime-copilot/AGENTS.md) |
 | HTTP server, MCP endpoint, mock Jira/Teams routes, demo mode | [apps/server/AGENTS.md](apps/server/AGENTS.md) |
 | The web UI | [apps/web/AGENTS.md](apps/web/AGENTS.md) |
 
 `README.md` is the user-facing description. `PLAN.md` and `PLAN-2-work-queue.md` are the
-design and build order; slices A–E of plan 2 are built, slice F is not.
+design and build order; all of plan 2 (slices A–F) is built.
 
 ## Layout
 
@@ -44,7 +44,7 @@ Run from the repository root.
 |---|---|
 | `npm run typecheck` | Type-checks `packages/*` and `apps/server`. **Does not cover the web app** |
 | `npm run build` | Type-checks and builds the web app into `apps/web/dist` |
-| `npm test` | Vitest, both test files (about 3 seconds) |
+| `npm test` | Vitest, both test files (about 5 seconds; one test starts the real Copilot CLI) |
 | `npm run demo` | Server on port 4517, in memory, with sample agents and a self-feeding mock Jira |
 | `npm start` | Server on port 4517 with data in `./data` |
 | `npm run dev` | Server (watch) + Vite dev server on 5173, proxying to 4517 |
@@ -95,9 +95,14 @@ These are deliberate. Do not weaken one as a side effect of another change.
 3. Ticket and webhook content is data, never instructions: it reaches the agent inside a prompt
    template and cannot change an agent's tools or guardrails.
 4. Every tool call an agent makes goes through the policy check in the engine. A new way for an
-   agent to act must call `authorize` too.
+   agent to act must call `authorize` too. A runtime's own built-in tools that skip the check
+   are switched off (the Copilot CLI's GitHub MCP server is — see the runtime's guide).
 5. Writing to Jira by Foreman itself is off until a person turns it on.
-6. Every non-read-only capability call is written to the audit log with its actor.
+6. Every non-read-only capability call is written to the audit log with its actor. A decision
+   made from a Teams card goes through `approvals.decide` as the actor `teams:<name> · <object id>`.
+7. Inbound messages to the Teams bot are accepted only with a valid Bot Framework token, and
+   only a verified message may record a conversation — its service URL receives the bot's token.
+   There is no switch to skip the check.
 
 ## Things that are easy to get wrong
 
@@ -121,12 +126,15 @@ These are deliberate. Do not weaken one as a side effect of another change.
 Be honest about these in anything you report; none of them is covered by a test against the
 real service.
 
-- **Copilot runtime.** It type-checks against `@github/copilot-sdk`, but the maintainer has no
-  Copilot subscription, so no agent has ever run on it. The simulated runtime is the default.
-- **Real Jira.** Sign-in, search, comments, transitions and subtasks are tested only against the
-  built-in mock.
-- **Real Teams.** Cards follow the documented Workflows-webhook format and are tested over HTTP
-  against the mock only.
+- **Copilot runtime with a Copilot subscription.** The maintainer has none. The runtime itself
+  *does* run, in tests and the demo, on a model endpoint of your own (`spec.provider`, "bring your
+  own key") pointed at Foreman's mock model at `/mock/model/v1`. No real model provider has been
+  tried. The simulated runtime is the default.
+- **Real Jira.** Sign-in, search, comments, transitions, subtasks and the webhook are tested only
+  against the built-in mock.
+- **Real Teams.** Workflows-webhook cards and the Teams bot (token checks, sending, updating,
+  button presses) follow Microsoft's documented formats and are tested over HTTP against the
+  mock Bot Framework only. No Entra app registration has been used.
 
 ## Git
 

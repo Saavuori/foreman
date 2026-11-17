@@ -1,7 +1,9 @@
 # Secrets vault and redaction
 
-Files: `src/vault.ts`, `src/capabilities/vault.ts`. Used by `work.ts` (Jira token),
-`notify.ts` (channel addresses), `engine.ts` (scrubbing, reference resolution).
+Files: `src/vault.ts`, `src/capabilities/vault.ts`. Used by `work.ts` (Jira token, Jira webhook
+secret), `notify.ts` (channel addresses), `teamsbot.ts` (the bot's client secret, by name),
+`engine.ts` (scrubbing, reference resolution), and the Copilot adapter (an agent's model key,
+`spec.provider.secretName`, resolved when the session is built).
 
 ## Guarantees
 

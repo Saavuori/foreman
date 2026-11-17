@@ -14,7 +14,12 @@ function mergeSpec(current: AgentSpec, patch: Record<string, unknown>): AgentSpe
     }
     const parsed = AgentSpec.safeParse(merged);
     if (!parsed.success) throw new CapabilityError(`Invalid agent spec: ${z.prettifyError(parsed.error)}`, "invalid_input");
+    checkSpec(parsed.data);
     return parsed.data;
+}
+/** Rules that span fields, which the schema alone cannot express. */
+function checkSpec(spec: AgentSpec) {
+    if (spec.provider && spec.model === "auto") throw new CapabilityError("With your own model provider, name the model (the provider's model id) instead of \"auto\"", "invalid_input");
 }
 
 export function requireAgent(ctx: Ctx, agentId: string) {
@@ -25,7 +30,7 @@ export function requireAgent(ctx: Ctx, agentId: string) {
 
 const SpecPatch = AgentSpec.partial()
     // Optional fields accept null, which clears them.
-    .extend({ outputSchema: AgentSpec.shape.outputSchema.nullable(), reasoningEffort: AgentSpec.shape.reasoningEffort.nullable() })
+    .extend({ outputSchema: AgentSpec.shape.outputSchema.nullable(), reasoningEffort: AgentSpec.shape.reasoningEffort.nullable(), provider: AgentSpec.shape.provider.nullable() })
     .describe(
     "Fields of the agent spec to set. Omitted fields keep their current value; `policy` and `budget` merge key by key; pass null to clear an optional field such as outputSchema.",
 );
@@ -81,6 +86,7 @@ export const agentCapabilities = [
             note: z.string().default("Initial revision"),
         }),
         handler: (ctx, input) => {
+            checkSpec(input.spec);
             const created = ctx.store.createAgent({ ...input, actor: actorLabel(ctx.actor) });
             ctx.bus.emit("change", "agents");
             return created;

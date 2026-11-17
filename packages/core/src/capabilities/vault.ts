@@ -9,9 +9,12 @@ function usage(ctx: Ctx): Map<string, string[]> {
     const add = (name: string, where: string) => used.set(name, [...new Set([...(used.get(name) ?? []), where])]);
     const jira = ctx.work.settings().auth;
     if (jira.type !== "none" && jira.secretName) add(jira.secretName, "Jira connection");
+    const bot = ctx.bot.settings();
+    if (bot.secretName) add(bot.secretName, "Teams bot");
     for (const agent of ctx.store.listAgents()) {
         const spec = ctx.store.getRevision(agent.activeRevisionId)?.spec;
         if (spec) for (const name of Vault.references(JSON.stringify(spec.mcpServers))) add(name, `Agent: ${agent.name}`);
+        if (spec?.provider?.secretName) add(spec.provider.secretName, `Agent: ${agent.name} (model key)`);
     }
     return used;
 }

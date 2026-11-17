@@ -245,6 +245,12 @@ export class MockJira {
     private generated = 0;
     private commentSeq = 0;
     perMinute = 0;
+    /** When set, the mock calls this address on every new or edited ticket, as a Jira webhook would. */
+    webhookUrl: string | null = null;
+    private announce(event: string, issue: MockIssue) {
+        if (!this.webhookUrl) return;
+        void fetch(this.webhookUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ webhookEvent: event, issue: { key: issue.key } }), signal: AbortSignal.timeout(5000) }).catch(() => {});
+    }
     /** When set, every request must carry exactly this Authorization header (tests use it). */
     requiredAuth: string | null = null;
 
@@ -277,6 +283,7 @@ export class MockJira {
             },
         };
         this.issues.set(issue.key, issue);
+        this.announce("jira:issue_created", issue);
         return issue;
     }
 

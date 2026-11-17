@@ -43,6 +43,14 @@ Three ways in, one pipeline (`WorkHub.ingest(ticket)`), which never creates a du
 
 A failing poll emits one `notice` per outage, not one per attempt.
 
+**The Jira webhook** (`POST /hooks/jira/:secret`) is not a fourth way in: it calls `nudge()`,
+which polls at once (or once more after a poll in flight, via `pollAgain`). The request body is
+ignored on purpose — a webhook could name any ticket, and only the JQL filter decides what is
+taken. The secret is random, sealed in settings key `jira.webhookSecret`, and replaced by
+`jira.rotate_webhook`. `webhookUrl()` builds the address from `baseUrl`, so Jira can only reach
+it if `FOREMAN_BASE_URL` is a public address. `MockJira.webhookUrl`, when set, makes the mock call
+it on every new ticket (`mockjira.webhooks`); the demo turns that on and polls only every 30 s.
+
 ## Routing and dispatch
 
 `route(ticket)` returns the first enabled rule (ordered by `position`) whose `match` fields all

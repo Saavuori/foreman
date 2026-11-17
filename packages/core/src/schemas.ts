@@ -43,12 +43,24 @@ export const SubAgentSpec = z.object({
 });
 export type SubAgentSpec = z.infer<typeof SubAgentSpec>;
 
+/** Run on your own model-provider key instead of a Copilot subscription. */
+export const ModelProvider = z.object({
+    type: z.enum(["openai", "azure", "anthropic"]).default("openai").describe("openai covers any OpenAI-compatible endpoint, including local ones"),
+    baseUrl: z.string().url().describe("API endpoint, e.g. https://api.openai.com/v1"),
+    /** Name of the vault secret holding the API key. Empty for an endpoint that needs none. */
+    secretName: z.string().default(""),
+    wireApi: z.enum(["completions", "responses"]).optional(),
+});
+export type ModelProvider = z.infer<typeof ModelProvider>;
+
 export const AgentSpec = z.object({
     instructions: z.string().default(""),
     model: z.string().default("auto"),
     reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
     /** Which runtime executes runs. `simulated` needs no Copilot access and is deterministic. */
     runtime: z.enum(["copilot", "simulated"]).default("simulated"),
+    /** Copilot runtime only: use this provider and key instead of Copilot's own models. */
+    provider: ModelProvider.optional(),
     /** How the mock runtime behaves for this agent. Ignored by real runtimes. */
     mock: z
         .object({

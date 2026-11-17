@@ -57,6 +57,20 @@ const AGENTS: DemoAgent[] = [
     },
 ];
 
+/** Runs on the real Copilot runtime against the built-in mock model endpoint: no subscription, no key. */
+const modelBacked = (baseUrl: string): Omit<DemoAgent, "routes"> => ({
+    name: "Model-backed reader",
+    description: "Runs on the real Copilot runtime with its own model endpoint (the built-in mock model). Reads a ticket; may not comment.",
+    spec: {
+        runtime: "copilot",
+        model: "gpt-4o",
+        provider: { type: "openai", baseUrl: `${baseUrl}/mock/model/v1` },
+        instructions: "Read the ticket named in the task and summarise it. Do not change anything.",
+        tools: ["jira_get_issue", "jira_add_comment"],
+        policy: { autonomy: "act", rules: [{ match: "jira_add_comment", action: "deny", note: "Read-only agent" }] },
+    },
+});
+
 /**
  * Demo mode: sample agents on the mock runtime, routing rules, and the mock Jira filing tickets on
  * its own — so the work board is alive without Copilot, Jira or Teams. Stories are deliberately
@@ -67,17 +81,31 @@ export function startDemo(foreman: Foreman): () => void {
         const { agent } = foreman.store.createAgent({ name: def.name, description: def.description, spec: AgentSpec.parse(def.spec), note: "Demo agent", actor: "system:demo" });
         for (const route of def.routes) foreman.store.createRule({ name: route.name, match: route.match, agentId: agent.id, review: route.review ?? false, promptTemplate: DEFAULT_TICKET_PROMPT, enabled: true });
     }
+    const reader = modelBacked(foreman.info.baseUrl);
+    foreman.store.createAgent({ name: reader.name, description: reader.description, spec: AgentSpec.parse(reader.spec), note: "Demo agent", actor: "system:demo" });
     const teams = foreman.notify.createChannel({ name: "Agents (Teams preview)", kind: "mock_teams" });
-    foreman.notify.createRule({ name: "Everything that needs a person", events: ["approval_needed", "question_asked", "batch_done", "jira_write_failed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "digest", "custom"], channelId: teams.id });
+    // Approvals and questions go to the bot instead, whose cards can be answered in place.
+    foreman.notify.createRule({ name: "Everything else a person should see", events: ["batch_done", "jira_write_failed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "digest", "custom"], channelId: teams.id });
+    foreman.bot.configure({ enabled: true, mock: true });
     foreman.notify.configure({ agingMinutes: 2 });
-    foreman.work.updateSettings({ enabled: true, pollSeconds: 4, wipPerAgent: 2, writeBack: { enabled: true, statusStarted: "In Progress", statusReview: "In Review", statusDone: "Done" } });
+    foreman.work.updateSettings({ enabled: true, pollSeconds: 30, wipPerAgent: 2, writeBack: { enabled: true, statusStarted: "In Progress", statusReview: "In Review", statusDone: "Done" } });
     foreman.mockJira.setGenerator(5);
+    // New mock tickets announce themselves by webhook, so they appear at once rather than on the next poll.
+    foreman.mockJira.webhookUrl = foreman.work.webhookUrl();
     void foreman.work.poll().catch(() => {});
     // One batch to watch: the documentation tickets, tracked as a single job. It is created a
     // moment after start because the mock Jira is served by this same process.
     const batch = setTimeout(() => void foreman.batches.create({ name: "Docs catch-up", jql: "project = DOC" }).catch(() => {}), 2500);
+    // The mock adds the bot to a team over HTTP, as Teams would, so this also waits for the server.
+    const install = setTimeout(async () => {
+        const installed = await foreman.mockBot.install("Foreman demo", "Approvals").catch(() => null);
+        if (installed?.status !== 200) return;
+        const channel = foreman.notify.createChannel({ name: "Approvals (Teams bot)", kind: "teams_bot", webhookUrl: installed.conversationId });
+        foreman.notify.createRule({ name: "Decide in Teams", events: ["approval_needed", "question_asked"], channelId: channel.id });
+    }, 1500);
     return () => {
         clearTimeout(batch);
+        clearTimeout(install);
         foreman.mockJira.setGenerator(0);
     };
 }

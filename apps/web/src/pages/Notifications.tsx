@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
 import { go, rpc, useRpc } from "../api.ts";
-import { Empty, ErrorBanner, Field, Lamp, relTime, Segmented, useAction, useTick } from "../ui.tsx";
+import { CopyButton, Empty, ErrorBanner, Field, Lamp, relTime, Segmented, useAction, useTick } from "../ui.tsx";
 
 type View = "inbox" | "teams" | "setup" | "log";
 const SEVERITY_LAMP: Record<string, string> = { info: "running", success: "ok", warning: "pending", error: "error" };
-const KIND_LABEL: Record<string, string> = { teams: "Teams", mock_teams: "Teams preview", webhook: "Webhook" };
+const KIND_LABEL: Record<string, string> = { teams: "Teams", teams_bot: "Teams bot", mock_teams: "Teams preview", webhook: "Webhook" };
 
 // ── A small Adaptive Card renderer: just the elements Foreman's cards use ──
 const CARD_COLOR: Record<string, string> = { Accent: "var(--run)", Good: "var(--go)", Warning: "var(--hivis-ink)", Attention: "var(--stop)" };
-function AdaptiveCard({ card }: { card: any }) {
+/** `onExecute` makes Action.Execute buttons work, as they do in Teams when the card came from the bot. */
+function AdaptiveCard({ card, onExecute, busy }: { card: any; onExecute?: (verb: string, inputs: Record<string, string>) => void; busy?: boolean }) {
+    const [inputs, setInputs] = useState<Record<string, string>>({});
     return (
         <div className="acard">
             {(card.body ?? []).map((el: any, i: number) => {
@@ -29,15 +31,23 @@ function AdaptiveCard({ card }: { card: any }) {
                             ))}
                         </dl>
                     );
+                if (el.type === "Input.Text")
+                    return <textarea key={i} className="input acard-input" rows={el.isMultiline ? 3 : 1} placeholder={el.placeholder} value={inputs[el.id] ?? ""} onChange={(e) => setInputs({ ...inputs, [el.id]: e.target.value })} disabled={!onExecute} aria-label={el.placeholder ?? el.id} />;
                 return null;
             })}
             {card.actions?.length ? (
                 <div className="acard-actions">
-                    {card.actions.map((a: any) => (
-                        <a key={a.title} href={a.url} target={a.url.includes("/#/") ? undefined : "_blank"} rel="noreferrer">
-                            {a.title}
-                        </a>
-                    ))}
+                    {card.actions.map((a: any) =>
+                        a.type === "Action.Execute" ? (
+                            <button key={a.title} type="button" className={a.style === "positive" ? "primary" : a.style === "destructive" ? "destructive" : ""} disabled={!onExecute || busy} title={onExecute ? undefined : "Buttons work only on cards from the bot"} onClick={() => onExecute?.(a.verb, inputs)}>
+                                {a.title}
+                            </button>
+                        ) : (
+                            <a key={a.title} href={a.url} target={a.url.includes("/#/") ? undefined : "_blank"} rel="noreferrer">
+                                {a.title}
+                            </a>
+                        ),
+                    )}
                 </div>
             ) : null}
         </div>
@@ -85,13 +95,20 @@ function Inbox() {
     );
 }
 
-function TeamsPreview({ channels }: { channels: any[] }) {
+function TeamsPreview({ channels, bot }: { channels: any[]; bot: any }) {
     const mocks = channels.filter((c) => c.kind === "mock_teams");
+    const conversations: any[] = bot?.mock ? (bot.conversations ?? []) : [];
     const [channelId, setChannelId] = useState("");
+    const [actingAs, setActingAs] = useState("Mock Approver");
     const messages = useRpc<any[]>("mockteams.messages", { channelId: channelId || undefined }, ["notify"]);
     const { busy, run } = useAction();
-    const names = new Map(channels.map((c) => [c.id, c.name]));
-    if (!mocks.length && !messages.data?.length)
+    const names = new Map<string, string>([...channels, ...conversations].map((c) => [c.id, c.name]));
+    const press = (messageId: string, verb: string, inputs: Record<string, string>) =>
+        run(async () => {
+            const out = await rpc<any>("mockteams.press", { messageId, verb, answer: inputs.answer, userName: actingAs.trim() || "Mock Approver" });
+            if (!out.updated) throw new Error(`The bot replied: ${out.message}`);
+        }, verb === "answer" ? "Answer sent from Teams" : verb === "approve" ? "Approved from Teams" : "Denied from Teams");
+    if (!mocks.length && !conversations.length && !messages.data?.length)
         return (
             <div className="card">
                 <Empty title="No Teams preview channel">
@@ -116,10 +133,21 @@ function TeamsPreview({ channels }: { channels: any[] }) {
                             {c.name}
                         </option>
                     ))}
+                    {conversations.map((c) => (
+                        <option key={c.id} value={c.id}>
+                            {c.name} (bot)
+                        </option>
+                    ))}
                 </select>
                 <span className="muted grow" style={{ fontSize: 12.5 }}>
                     A stand-in for Teams. These are the Adaptive Cards a real channel would receive.
                 </span>
+                {conversations.length ? (
+                    <label className="row" style={{ gap: 6, fontSize: 12.5 }}>
+                        <span className="muted">Pressing as</span>
+                        <input className="input" style={{ width: 150 }} value={actingAs} onChange={(e) => setActingAs(e.target.value)} aria-label="Teams user pressing the buttons" />
+                    </label>
+                ) : null}
                 <button className="btn sm" disabled={busy || !messages.data?.length} onClick={() => run(() => rpc("mockteams.clear", { channelId: channelId || undefined }), "Cleared")}>
                     Clear
                 </button>
@@ -133,9 +161,13 @@ function TeamsPreview({ channels }: { channels: any[] }) {
                             </span>
                             <div className="grow" style={{ minWidth: 0 }}>
                                 <div className="teams-meta">
-                                    <b>Foreman</b> <span className="muted">via Workflows · {names.get(m.channel) ?? m.channel} · {relTime(m.ts)}</span>
+                                    <b>Foreman</b>{" "}
+                                    <span className="muted">
+                                        {m.via === "bot" ? "bot" : "via Workflows"} · {names.get(m.channel) ?? m.channel} · {relTime(m.ts)}
+                                        {m.updatedAt ? ` · updated ${relTime(m.updatedAt)}` : ""}
+                                    </span>
                                 </div>
-                                <AdaptiveCard card={m.payload.attachments[0].content} />
+                                <AdaptiveCard key={m.updatedAt ?? m.id} card={m.payload.attachments[0].content} busy={busy} onExecute={m.via === "bot" ? (verb, inputs) => void press(m.id, verb, inputs) : undefined} />
                             </div>
                         </div>
                     ))
@@ -149,10 +181,102 @@ function TeamsPreview({ channels }: { channels: any[] }) {
     );
 }
 
-function Setup({ channels, agents, settings }: { channels: any[]; agents: any[]; settings: any }) {
+function BotSetup({ bot }: { bot: any }) {
+    const { busy, run } = useAction();
+    const [form, setForm] = useState<any>(null);
+    useEffect(() => {
+        if (bot && !form) setForm({ appId: bot.appId, tenantId: bot.tenantId, secret: "", approvers: bot.approvers.join("\n") });
+    }, [bot, form]);
+    if (!bot || !form) return null;
+    const secretName = bot.secretName || "teams-bot-secret";
+    const save = (e: React.FormEvent) => {
+        e.preventDefault();
+        void run(async () => {
+            // The client secret goes to the vault; the bot settings hold only its name.
+            if (form.secret) await rpc("secrets.set", { name: secretName, secretValue: form.secret, description: "Teams bot client secret" });
+            await rpc("teamsbot.configure", { appId: form.appId.trim(), tenantId: form.tenantId.trim(), secretName: form.secret || bot.secretName ? secretName : "", approvers: form.approvers.split(/[\s,]+/).filter(Boolean) });
+            setForm({ ...form, secret: "" });
+        }, "Bot settings saved");
+    };
+    return (
+        <div className="card">
+            <div className="card-head">
+                <h3>Teams bot</h3>
+                <Lamp status={bot.enabled ? "ok" : "idle"} bare />
+                <span className="grow" />
+                <button className={`btn sm ${bot.enabled ? "" : "hivis"}`} disabled={busy} onClick={() => run(() => rpc("teamsbot.configure", { enabled: !bot.enabled }), bot.enabled ? "Bot turned off" : "Bot turned on")}>
+                    {bot.enabled ? "Turn off" : "Turn on"}
+                </button>
+            </div>
+            <div className="card-body stack">
+                <span className="hint">With the bot, approvals and questions arrive as cards with working Approve, Deny and answer buttons. A press is decided as that Teams user and recorded under their name.</span>
+                <div className="field">
+                    <span className="label">Talks to</span>
+                    <Segmented label="Bot Framework" value={bot.mock ? "mock" : "microsoft"} onChange={(v) => void run(() => rpc("teamsbot.configure", { mock: v === "mock" }))} options={[{ value: "mock", label: "Built-in mock" }, { value: "microsoft", label: "Microsoft Teams" }]} />
+                </div>
+                {bot.mock ? (
+                    <div className="row wrap">
+                        <span className="hint grow">The mock Bot Framework signs its messages and receives the bot's cards into the Teams preview, so the whole path can be tried here.</span>
+                        <button className="btn sm" disabled={busy || !bot.enabled} onClick={() => run(() => rpc("mockteams.install", {}), "Bot added to Foreman demo › Approvals")}>
+                            Add the bot to a mock channel
+                        </button>
+                    </div>
+                ) : (
+                    <form className="stack" onSubmit={save}>
+                        <div className="cols" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                            <Field label="App ID" hint="From the Azure Bot resource (Microsoft App ID).">
+                                <input className="input code" value={form.appId} onChange={(e) => setForm({ ...form, appId: e.target.value })} placeholder="00000000-0000-0000-0000-000000000000" />
+                            </Field>
+                            <Field label="Tenant ID" hint="For a single-tenant bot. Empty for multi-tenant.">
+                                <input className="input code" value={form.tenantId} onChange={(e) => setForm({ ...form, tenantId: e.target.value })} />
+                            </Field>
+                        </div>
+                        <Field label="Client secret" hint={bot.secretName ? `Stored as “${bot.secretName}”. Type a new one only to replace it.` : "Stored encrypted under Secrets. It is never shown again."}>
+                            <input className="input code" type="password" value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} placeholder={bot.secretName ? "••••••••  (stored)" : ""} autoComplete="new-password" />
+                        </Field>
+                        <Field label="Who may decide from Teams" hint="Entra object ids, one per line. Empty lets anyone who can see the card decide.">
+                            <textarea className="input code" rows={2} value={form.approvers} onChange={(e) => setForm({ ...form, approvers: e.target.value })} />
+                        </Field>
+                        <div className="field">
+                            <span className="label">Messaging endpoint</span>
+                            <div className="row" style={{ gap: 8 }}>
+                                <code className="mono truncate grow" style={{ fontSize: 12.5 }}>
+                                    {bot.messagingEndpoint}
+                                </code>
+                                <CopyButton text={bot.messagingEndpoint} />
+                            </div>
+                            <span className="hint">Enter it in the Azure Bot resource. Teams must be able to reach it over HTTPS.</span>
+                        </div>
+                        <div>
+                            <button className="btn primary" disabled={busy}>
+                                Save
+                            </button>
+                        </div>
+                    </form>
+                )}
+                <div className="field">
+                    <span className="label">Added to</span>
+                    {bot.conversations.length ? (
+                        <div className="row wrap" style={{ gap: 6 }}>
+                            {bot.conversations.map((c: any) => (
+                                <span key={c.id} className="tag" title={c.id}>
+                                    {c.name}
+                                </span>
+                            ))}
+                        </div>
+                    ) : (
+                        <span className="hint">No conversations yet. Add the bot to a team channel in Teams; it shows up here, and can then be chosen as a channel.</span>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function Setup({ channels, agents, settings, bot }: { channels: any[]; agents: any[]; settings: any; bot: any }) {
     const rules = useRpc<any[]>("notifyrules.list", {}, ["notify", "agents"]);
     const { busy, run } = useAction();
-    const [channel, setChannel] = useState({ name: "", kind: "teams", webhookUrl: "" });
+    const [channel, setChannel] = useState({ name: "", kind: "teams", webhookUrl: "", conversationId: "" });
     const [rule, setRule] = useState<{ name: string; events: string[]; agentId: string; project: string; channelId: string }>({ name: "", events: [], agentId: "", project: "", channelId: "" });
     const [form, setForm] = useState<any>(null);
     useEffect(() => {
@@ -164,8 +288,8 @@ function Setup({ channels, agents, settings }: { channels: any[]; agents: any[];
 
     const addChannel = async (e: React.FormEvent) => {
         e.preventDefault();
-        const out = await run(() => rpc("channels.create", { name: channel.name, kind: channel.kind, webhookUrl: channel.kind === "mock_teams" ? undefined : channel.webhookUrl }), "Channel added");
-        if (out) setChannel({ name: "", kind: channel.kind, webhookUrl: "" });
+        const out = await run(() => rpc("channels.create", { name: channel.name, kind: channel.kind, webhookUrl: channel.kind === "teams" || channel.kind === "webhook" ? channel.webhookUrl : undefined, conversationId: channel.kind === "teams_bot" ? channel.conversationId : undefined }), "Channel added");
+        if (out) setChannel({ name: "", kind: channel.kind, webhookUrl: "", conversationId: "" });
     };
     const addRule = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -211,11 +335,22 @@ function Setup({ channels, agents, settings }: { channels: any[]; agents: any[];
                     </div>
                     <form className="form-section" style={{ borderTop: "1px solid var(--line)" }} onSubmit={addChannel}>
                         <h3>Add a channel</h3>
-                        <Segmented label="Channel kind" value={channel.kind} onChange={(kind) => setChannel({ ...channel, kind })} options={[{ value: "teams", label: "Teams" }, { value: "mock_teams", label: "Teams preview" }, { value: "webhook", label: "Webhook" }]} />
+                        <Segmented label="Channel kind" value={channel.kind} onChange={(kind) => setChannel({ ...channel, kind })} options={[{ value: "teams", label: "Teams" }, { value: "teams_bot", label: "Teams bot" }, { value: "mock_teams", label: "Teams preview" }, { value: "webhook", label: "Webhook" }]} />
                         <Field label="Name">
                             <input className="input" value={channel.name} onChange={(e) => setChannel({ ...channel, name: e.target.value })} placeholder={channel.kind === "webhook" ? "Ops webhook" : "Payments team"} required />
                         </Field>
-                        {channel.kind !== "mock_teams" ? (
+                        {channel.kind === "teams_bot" ? (
+                            <Field label="Conversation" hint={bot?.conversations.length ? "Cards from the bot have working Approve, Deny and answer buttons." : "The bot has not been added anywhere yet. Set it up under Teams bot below."}>
+                                <select className="input" value={channel.conversationId} onChange={(e) => setChannel({ ...channel, conversationId: e.target.value })} required>
+                                    <option value="">Choose a conversation…</option>
+                                    {(bot?.conversations ?? []).map((c: any) => (
+                                        <option key={c.id} value={c.id}>
+                                            {c.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Field>
+                        ) : channel.kind !== "mock_teams" ? (
                             <Field
                                 label="Webhook address"
                                 hint={channel.kind === "teams" ? "In Teams: channel menu → Workflows → “Send webhook alerts to a channel”, then paste the address it gives you. Treat it as a secret; Foreman shows only its last characters afterwards." : "Foreman POSTs plain JSON: event, severity, title, text, facts, links."}
@@ -232,6 +367,8 @@ function Setup({ channels, agents, settings }: { channels: any[]; agents: any[];
                         </div>
                     </form>
                 </div>
+
+                <BotSetup bot={bot} />
 
                 <div className="card">
                     <div className="card-head">
@@ -429,6 +566,7 @@ export function Notifications({ view: initial }: { view?: string }) {
     const channels = useRpc<any[]>("channels.list", {}, ["notify"]);
     const agents = useRpc<any[]>("agents.list", {}, ["agents"]);
     const settings = useRpc<any>("notify.settings", {}, ["notify"]);
+    const bot = useRpc<any>("teamsbot.status", {}, ["notify"]);
     return (
         <div className="page">
             <header className="page-head">
@@ -439,7 +577,7 @@ export function Notifications({ view: initial }: { view?: string }) {
                 <Segmented label="View" value={view} onChange={(v) => go(`/notifications/${v}`)} options={[{ value: "inbox", label: "Inbox" }, { value: "teams", label: "Teams preview" }, { value: "setup", label: "Channels & rules" }, { value: "log", label: "Delivery log" }]} />
             </header>
             <ErrorBanner error={channels.error} />
-            {view === "inbox" ? <Inbox /> : view === "teams" ? <TeamsPreview channels={channels.data ?? []} /> : view === "setup" ? <Setup channels={channels.data ?? []} agents={agents.data ?? []} settings={settings.data} /> : <Log />}
+            {view === "inbox" ? <Inbox /> : view === "teams" ? <TeamsPreview channels={channels.data ?? []} bot={bot.data} /> : view === "setup" ? <Setup channels={channels.data ?? []} agents={agents.data ?? []} settings={settings.data} bot={bot.data} /> : <Log />}
         </div>
     );
 }

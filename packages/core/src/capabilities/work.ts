@@ -257,6 +257,39 @@ export const workCapabilities = [
         },
     }),
     defineCapability({
+        name: "jira.webhook",
+        title: "Jira webhook address",
+        description:
+            "The address to give Jira (a webhook, or an Automation rule's \"Send web request\") for instant pickup instead of waiting for the next poll. A call to it makes Foreman check Jira straight away; the intake filter still decides which tickets are taken. The address contains a secret. Needs Foreman to be reachable from Jira.",
+        readOnly: true,
+        input: z.object({}),
+        handler: (ctx) => ({ url: ctx.work.webhookUrl(), received: ctx.work.webhook.received, lastReceivedAt: ctx.work.webhook.lastAt, mockSendsWebhooks: !!ctx.mockJira.webhookUrl }),
+    }),
+    defineCapability({
+        name: "jira.rotate_webhook",
+        title: "Replace the Jira webhook address",
+        description: "Make a new secret for the Jira webhook address. The old address stops working at once, so Jira must be given the new one.",
+        destructive: true,
+        input: z.object({}),
+        handler: (ctx) => {
+            const wasMock = !!ctx.mockJira.webhookUrl;
+            ctx.work.rotateWebhookSecret();
+            if (wasMock) ctx.mockJira.webhookUrl = ctx.work.webhookUrl();
+            return { url: ctx.work.webhookUrl() };
+        },
+    }),
+    defineCapability({
+        name: "mockjira.webhooks",
+        title: "Mock Jira webhooks",
+        description: "Have the built-in mock Jira call Foreman's webhook address whenever a ticket is filed, as a real Jira webhook would.",
+        input: z.object({ enabled: z.boolean() }),
+        handler: (ctx, { enabled }) => {
+            ctx.mockJira.webhookUrl = enabled ? ctx.work.webhookUrl() : null;
+            ctx.bus.emit("change", "work");
+            return { enabled };
+        },
+    }),
+    defineCapability({
         name: "mockjira.create_issue",
         title: "File a mock Jira ticket",
         description: "Create a ticket in the built-in mock Jira, as a person would in the real one. Add a label like mock:flaky or mock:needs-approval to choose how the mock agent behaves on it. Leave summary empty for a generated ticket.",

@@ -3,7 +3,7 @@ import { go, rpc, useRpc } from "../api.ts";
 import { Trace } from "../Trace.tsx";
 import { AnswerBox } from "../Answer.tsx";
 import { Batches, Flow, Timeline } from "./WorkViews.tsx";
-import { duration, Empty, ErrorBanner, Field, Lamp, Modal, pct, relTime, runDuration, Segmented, useAction, useTick } from "../ui.tsx";
+import { CopyButton, duration, Empty, ErrorBanner, Field, Lamp, Modal, pct, relTime, runDuration, Segmented, useAction, useTick } from "../ui.tsx";
 
 type View = "board" | "queue" | "timeline" | "flow" | "batches" | "setup";
 const COLUMNS: { state: string; title: string; hint: string }[] = [
@@ -268,6 +268,7 @@ function AddTickets({ onClose }: { onClose: () => void }) {
 
 function Setup({ agents, jira }: { agents: any[]; jira: any }) {
     const rules = useRpc<any[]>("routing.list", {}, ["work", "agents"]);
+    const hook = useRpc<any>("jira.webhook", {}, ["work"]);
     const { busy, run } = useAction();
     const [name, setName] = useState("");
     const [match, setMatch] = useState({ project: "", type: "", label: "", priority: "" });
@@ -545,6 +546,36 @@ function Setup({ agents, jira }: { agents: any[]; jira: any }) {
                         </form>
                     ) : null}
                 </div>
+
+                {hook.data ? (
+                    <div className="card">
+                        <div className="card-head">
+                            <h3>Instant pickup</h3>
+                            <span className="grow" />
+                            <span className="muted" style={{ fontSize: 12.5 }}>
+                                {hook.data.received ? `${hook.data.received} call${hook.data.received === 1 ? "" : "s"}, last ${relTime(hook.data.lastReceivedAt)}` : "Not called yet"}
+                            </span>
+                        </div>
+                        <div className="card-body stack">
+                            <span className="hint">Give this address to Jira as a webhook (or an Automation rule's “Send web request”) for issue created and updated. Each call makes Foreman check Jira at once instead of at the next poll; the filter above still decides what is taken. Jira must be able to reach Foreman.</span>
+                            <div className="row" style={{ gap: 8 }}>
+                                <code className="mono truncate grow" style={{ fontSize: 12.5 }} title="The end of the address is a secret">
+                                    {hook.data.url.replace(/[^/]+$/, (s: string) => `••••${s.slice(-4)}`)}
+                                </code>
+                                <CopyButton text={hook.data.url} label="Copy address" />
+                                <button className="btn sm ghost danger" disabled={busy} onClick={() => confirm("Make a new address? The current one stops working at once, so Jira must be given the new one.") && run(() => rpc("jira.rotate_webhook").then(hook.reload), "New address made")}>
+                                    Replace
+                                </button>
+                            </div>
+                            {jira?.usingMock ? (
+                                <label className="row" style={{ gap: 8 }}>
+                                    <input type="checkbox" checked={hook.data.mockSendsWebhooks} disabled={busy} onChange={(e) => run(() => rpc("mockjira.webhooks", { enabled: e.target.checked }).then(hook.reload))} />
+                                    <span>Mock Jira calls this address whenever a ticket is filed</span>
+                                </label>
+                            ) : null}
+                        </div>
+                    </div>
+                ) : null}
 
                 {jira?.usingMock ? (
                     <div className="card">

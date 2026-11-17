@@ -11,7 +11,10 @@ export interface CopilotRuntimeOptions {
 }
 
 // Streaming deltas would multiply the size of every trace; the complete events carry the same content.
-const SKIPPED_EVENTS = new Set(["assistant.message_delta", "assistant.reasoning_delta", "assistant.streaming_delta", "tool.execution_partial_result"]);
+// The message snapshots repeat the whole conversation on every turn, which the trace already holds.
+const SKIPPED_EVENTS = new Set(["assistant.message_delta", "assistant.reasoning_delta", "assistant.streaming_delta", "tool.execution_partial_result", "model.messages_snapshot", "pending_messages.modified"]);
+
+const BUILT_IN_MCP_SERVERS = ["github-mcp-server"];
 
 /** Turn the runtime's permission request into what the policy engine and a human approver need. */
 export function describePermission(request: PermissionRequest): AuthorizeRequest {
@@ -55,6 +58,11 @@ export function toSessionConfig(spec: AgentSpec, workingDirectory: string, resol
         availableTools: new ToolSet().addBuiltIn(spec.tools.filter((t) => !own.has(t))).addMcp("*").addCustom("*"),
         systemMessage: spec.instructions ? { mode: "append", content: spec.instructions } : undefined,
         mcpServers: mcpServers(spec, resolveSecrets),
+        // The runtime adds its own GitHub MCP server, signed in as whoever is logged in on this
+        // machine, and runs its read tools without a permission request — so past Foreman's guardrails.
+        disabledMcpServers: BUILT_IN_MCP_SERVERS.filter((name) => !(name in spec.mcpServers)),
+        // Bring your own key: the session talks to this provider and needs no Copilot subscription.
+        ...(spec.provider ? { provider: { type: spec.provider.type, baseUrl: spec.provider.baseUrl, wireApi: spec.provider.wireApi, apiKey: spec.provider.secretName ? resolveSecrets(`{{secret:${spec.provider.secretName}}}`) : undefined } } : {}),
         customAgents: spec.subAgents.map((a) => ({ name: a.name, description: a.description, prompt: a.prompt, tools: a.tools ?? null, model: a.model })),
         sessionLimits: { maxAiCredits: spec.budget.maxAiCredits },
     };
@@ -122,8 +130,9 @@ export class CopilotRuntime implements RuntimeAdapter {
                     skipPermission: true,
                     handler: async (args: unknown) => {
                         const reply = await x.tools.call(t.name, args);
-                        if (!reply.ok) throw new Error(reply.content);
-                        return reply.content;
+                        if (reply.ok) return reply.content;
+                        // A thrown error reaches the model and the trace only as "Tool execution failed".
+                        return { textResultForLlm: reply.content, resultType: /^Permission denied/.test(reply.content) ? "denied" : "failure", error: reply.content };
                     },
                 }),
             ),

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { Engine } from "./engine.ts";
 import { JiraClient } from "./jira.ts";
 import type { Actor, Bus } from "./registry.ts";
@@ -51,6 +52,9 @@ export class WorkHub {
     /** The most recent write-backs, newest first. Kept in memory. */
     writeLog: WriteBackEntry[] = [];
     private chains = new Map<string, Promise<void>>();
+    private pollAgain = false;
+    /** Webhook calls since start. */
+    webhook: { received: number; lastAt: string | null } = { received: 0, lastAt: null };
 
     constructor(
         private store: Store,
@@ -131,6 +135,35 @@ export class WorkHub {
         this.timer.unref?.();
     }
 
+    // ── webhook: instant pickup ───────────────────────────────────────────
+    /** The secret in the webhook address. Created on first use and stored sealed. */
+    webhookSecret(): string {
+        const sealed = this.store.getSetting<string>("jira.webhookSecret");
+        if (sealed) return this.options.vault.unseal(sealed);
+        return this.rotateWebhookSecret();
+    }
+    rotateWebhookSecret(): string {
+        const secret = randomBytes(24).toString("base64url");
+        this.store.setSetting("jira.webhookSecret", this.options.vault.seal(secret));
+        this.bus.emit("change", "work");
+        return secret;
+    }
+    webhookUrl(): string {
+        return `${this.options.baseUrl}/hooks/jira/${this.webhookSecret()}`;
+    }
+    /**
+     * Jira says something changed. The call's content is not trusted or used: it only makes Foreman
+     * check Jira now, so the intake filter stays the one thing that decides which tickets are taken.
+     */
+    nudge(): { accepted: boolean; reason?: string } {
+        this.webhook = { received: this.webhook.received + 1, lastAt: new Date().toISOString() };
+        this.bus.emit("change", "work");
+        if (!this.settings().enabled) return { accepted: false, reason: "Intake is switched off" };
+        if (this.polling) this.pollAgain = true;
+        else void this.poll().catch(() => {});
+        return { accepted: true };
+    }
+
     // ── intake ────────────────────────────────────────────────────────────
     /** Ask Jira for tickets matching the filter that changed since the last poll. */
     async poll(): Promise<{ fetched: number; added: number; updated: number }> {
@@ -165,6 +198,11 @@ export class WorkHub {
         } finally {
             this.polling = false;
             this.bus.emit("change", "work");
+            // A webhook arrived while this check was running: look again so nothing is missed.
+            if (this.pollAgain) {
+                this.pollAgain = false;
+                void this.poll().catch(() => {});
+            }
         }
     }
 

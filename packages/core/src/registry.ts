@@ -10,10 +10,12 @@ import type { MockJira } from "./jira.ts";
 import type { WorkHub } from "./work.ts";
 import type { Vault } from "./vault.ts";
 import type { BatchHub } from "./batches.ts";
+import type { MockBotFramework, TeamsBot } from "./teamsbot.ts";
 
 /** Who is calling. Every capability call is attributed and audited. */
 export interface Actor {
-    kind: "user" | "mcp" | "trigger" | "system";
+    /** `teams`: a person deciding from a Teams card; the id is their Teams name and Entra object id. */
+    kind: "user" | "mcp" | "trigger" | "system" | "teams";
     id: string;
 }
 export const actorLabel = (a: Actor) => `${a.kind}:${a.id}`;
@@ -46,6 +48,8 @@ export interface Services {
     notify: NotifyHub;
     vault: Vault;
     batches: BatchHub;
+    bot: TeamsBot;
+    mockBot: MockBotFramework;
     runtimes: Record<string, RuntimeAdapter>;
     registry: Registry;
     info: { version: string; dataDir: string; baseUrl: string; startedAt: string };

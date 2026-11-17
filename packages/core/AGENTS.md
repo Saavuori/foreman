@@ -24,6 +24,7 @@ here; `apps/server` and `apps/web` are thin layers over this package. Read the r
 | `batches.ts` | Batches: sets of tickets tracked as one job | [work-queue.md](docs/work-queue.md) |
 | `flow.ts` | Flow metrics and the per-agent run timeline | [work-queue.md](docs/work-queue.md) |
 | `notify.ts` | Notification hub, channels, rules, Adaptive Cards, mock Teams | [notifications.md](docs/notifications.md) |
+| `teamsbot.ts` | Teams bot (Bot Framework protocol, token checks, card buttons) and the mock Bot Framework | [notifications.md](docs/notifications.md) |
 | `vault.ts` | Encrypted secrets, sealing, scrubbing | [secrets.md](docs/secrets.md) |
 | `index.ts` | `createForeman(options)`: builds and wires everything; the package's exports | below |
 | `core.test.ts` | Unit-level tests through the registry | below |
@@ -33,8 +34,13 @@ here; `apps/server` and `apps/web` are thin layers over this package. Read the r
 `createForeman` in `index.ts` is the only place objects are constructed. Order matters:
 
 ```
-Store → Bus → runtimes → Vault → Engine → TriggerHub → MockJira → WorkHub → NotifyHub → BatchHub → Registry
+Store → Bus → runtimes → Vault → Engine → TriggerHub → MockJira → WorkHub → NotifyHub
+      → MockBotFramework → TeamsBot (notify.setBot) → BatchHub → Registry → bot.setDecider
 ```
+
+Two late bindings break what would be cycles: the bot stores its mock messages in the hub's
+`MockTeams`, so `NotifyHub` gets the bot with `setBot`; and the bot decides approvals through
+the registry, which exists last, so it gets `setDecider`.
 
 Hubs do not call each other's internals; they talk through the **Bus** (`registry.ts`):
 

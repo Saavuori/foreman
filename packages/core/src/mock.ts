@@ -376,3 +376,30 @@ export function sampleFromSchema(schema: any): unknown {
             return null;
     }
 }
+
+const TICKET_KEY = /\b[A-Z][A-Z0-9]+-\d+\b/;
+/**
+ * Answer one OpenAI-style chat-completions request the way a very predictable model would: call
+ * each offered tool once (never ask_for_info, which would wait for a person), then say what it
+ * did. It lets the real Copilot runtime — sessions, tools, permissions — run without any model key.
+ */
+export function mockModelReply(body: any): { message: Record<string, unknown>; finish: "stop" | "tool_calls" } {
+    const messages: any[] = body?.messages ?? [];
+    const tools: any[] = (body?.tools ?? []).map((t: any) => t.function ?? t).filter((t: any) => t?.name && t.name !== "ask_for_info");
+    const called = new Set(messages.flatMap((m) => (m.tool_calls ?? []).map((c: any) => c.function?.name)));
+    const next = tools.slice(0, 4).find((t) => !called.has(t.name));
+    if (next) {
+        const text = messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n");
+        const key = TICKET_KEY.exec(text)?.[0];
+        const args = (sampleFromSchema(next.parameters ?? { type: "object" }) ?? {}) as Record<string, unknown>;
+        for (const name of Object.keys(args)) {
+            if (key && /key$/i.test(name)) args[name] = key;
+            else if (name === "total") args[name] = 1;
+            else if (name === "jql") args[name] = "status != Done";
+        }
+        return { message: { role: "assistant", content: null, tool_calls: [{ id: `call_${called.size + 1}`, type: "function", function: { name: next.name, arguments: JSON.stringify(args) } }] }, finish: "tool_calls" };
+    }
+    const schema = body?.response_format?.json_schema?.schema;
+    const content = schema ? JSON.stringify(sampleFromSchema(schema)) : `Mock model finished. ${called.size ? `Called ${[...called].join(", ")}.` : "No tools were offered."} (No real model was used.)`;
+    return { message: { role: "assistant", content }, finish: "stop" };
+}

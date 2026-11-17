@@ -11,7 +11,8 @@ Files: `src/registry.ts` (machinery), `src/capabilities/*.ts` (definitions).
 | `runs.ts` | `runs.*`, `approvals.*` |
 | `work.ts` | `work.*`, `routing.*`, `jira.*`, `mockjira.*` |
 | `flow.ts` | `batches.*`, `work.flow`, `work.timeline` |
-| `notify.ts` | `notify.*`, `channels.*`, `notifyrules.*`, `mockteams.*` |
+| `notify.ts` | `notify.*`, `channels.*`, `notifyrules.*`, `mockteams.messages` / `clear` |
+| `teams.ts` | `teamsbot.*`, `mockteams.install` / `press` |
 | `vault.ts` | `secrets.*`, `system.agent_tools` |
 | `ops.ts` | `triggers.*`, `insights.*`, `audit.list`, `system.*`, `capabilities.search` |
 
@@ -30,7 +31,7 @@ defineCapability({
 ```
 
 - `ctx` is `Services` plus `actor`: `ctx.store`, `ctx.bus`, `ctx.engine`, `ctx.triggers`,
-  `ctx.work`, `ctx.mockJira`, `ctx.notify`, `ctx.vault`, `ctx.batches`, `ctx.runtimes`,
+  `ctx.work`, `ctx.mockJira`, `ctx.notify`, `ctx.vault`, `ctx.batches`, `ctx.bot`, `ctx.mockBot`, `ctx.runtimes`,
   `ctx.registry`, `ctx.info`, `ctx.actor`.
 - `input` is the parsed value with defaults applied. `raw` is what the caller sent.
 - Return values are sent as JSON as they are. Do not return class instances.
@@ -88,7 +89,8 @@ See `jira.configure` and `agents.update`. To let a caller clear an optional fiel
 ## Audit and redaction
 
 Every non-read-only call is recorded with its actor (for example `user:local`,
-`mcp:<client>`, `system:<what>`) and its input, after `redact()`.
+`mcp:<client>`, `system:<what>`, `teams:<name> · <Entra object id>`) and its input, after
+`redact()`.
 
 `redact()` works **by key name**: a string value is replaced with `•••` when its key matches
 `/(secret|token|password|authorization|api[-_]?key|webhook)/i`. So:
