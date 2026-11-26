@@ -5,6 +5,11 @@ guardrails in a web UI; every action is also an MCP tool.
 
 Plans: [PLAN.md](PLAN.md) (overall), [PLAN-2-work-queue.md](PLAN-2-work-queue.md) (Jira, Teams, mock).
 
+![The Board: approvals and a question waiting on a person, run totals for the last day, and what is on shift now](docs/screenshots/board.png)
+
+*The Board — what needs a person, what is running, and how the last day went. All screenshots in
+this file are from `npm run demo`, so the tickets, agents and numbers are the demo's own.*
+
 ## Run it
 
 Needs Node 22.13 or newer.
@@ -18,6 +23,11 @@ npm start          # normal mode, data saved in ./data
 
 Open http://localhost:4517. The MCP endpoint is http://localhost:4517/mcp.
 
+The **Connect** page shows the endpoint, ready-made client settings, and a console where every
+capability can be called by hand:
+
+![Connect page: MCP endpoint, client configuration for Claude Code and JSON clients, runtime status and the capability console](docs/screenshots/connect.png)
+
 For UI development run `npm run dev` (server with reload on 4517, Vite on 5173).
 
 ## Work queue
@@ -30,6 +40,8 @@ Until a real Jira site is configured, intake uses a **built-in mock Jira** (same
 with tickets, with a ticket generator). Give a mock ticket a label such as `mock:needs-approval`,
 `mock:asks-question` or `mock:flaky` to choose how the mock agent behaves on it. Everything on the page is also an MCP
 tool (`work_*`, `routing_*`, `jira_*`, `mockjira_*`).
+
+![Work board: columns for inbox, queued, working, needs you, review and done, with approve and answer buttons on the tickets that need a person](docs/screenshots/work-board.png)
 
 ## Batches, flow and the timeline
 
@@ -45,6 +57,15 @@ Three more views on the Work page:
   person marked. Shows load, idle gaps and overlaps.
 
 Over MCP: `batches_*`, `work_flow`, `work_timeline`.
+
+![Batches view: the "Docs catch-up" batch with its progress bar, cost and filter, next to the form for a new batch](docs/screenshots/work-batches.png)
+
+![Flow view: tickets done per day, cycle time, share needing a person, cost per ticket and queue depth over time](docs/screenshots/work-flow.png)
+
+![Timeline view: one lane per agent, with run bars and hatched stretches where a run waited on a person](docs/screenshots/work-timeline.png)
+
+The demo had been running for only a few minutes when these were taken, so Flow has a single day
+of data and the Timeline a few minutes of runs.
 
 ## Connecting a real Jira
 
@@ -69,6 +90,8 @@ is answered on the board, the Approvals page or with `work.answer`).
 Switch on the Jira tools per agent in the studio: `jira_get_issue`, `jira_search`,
 `jira_add_comment`, `jira_transition`, `jira_create_subtask`. The ones that change a ticket go
 through the agent's guardrails, so a rule `jira_transition → ask` keeps a person in the loop.
+
+![Agent studio for "Bug triage": instructions, runtime, mock scenario, built-in tools, and on the side a test bench, triggers and revisions](docs/screenshots/agent-studio.png)
 
 ## Secrets
 
@@ -96,6 +119,8 @@ all land in the in-app **inbox**. Rules decide which of them also go to a **chan
 
 Every delivery is logged with its result; failures are retried twice.
 
+![Teams preview: an "Approval needed" card from the bot with Approve and Deny buttons, above "Ticket failed" cards from the Workflows webhook](docs/screenshots/teams-preview.png)
+
 Jira can also call Foreman: give Jira the address under Work → Routing & intake → Instant pickup
 as a webhook, and new tickets are picked up at once instead of at the next check.
 
@@ -105,6 +130,11 @@ New agents use the **mock runtime**: scripted scenarios (clean success, stops fo
 failure, flaky, timeout, over budget, sub-agents, wrong result shape) that go through the real
 guardrails, approvals, budgets and traces. Pick a scenario per agent in the studio, or put
 `[mock:name]` in a prompt.
+
+Every run, mock or not, leaves a trace — each policy decision, tool call and model call, with
+timing — plus its cost, result and prompt, and can be replayed:
+
+![Run trace: the shift log of a succeeded Bug triage run with its stages, allowed tool calls and timings, next to totals, the result and the prompt](docs/screenshots/run-trace.png)
 
 Or **bring your own key**: an agent on the `copilot` runtime can name its own model provider
 (OpenAI-compatible, Azure OpenAI or Anthropic), endpoint and a stored API key, and then runs on the
