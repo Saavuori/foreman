@@ -58,9 +58,9 @@ export const vaultCapabilities = [
     defineCapability({
         name: "system.agent_tools",
         title: "Foreman's agent tools",
-        description: "Tools Foreman itself gives to agents on any runtime: progress reports and questions (always on), and Jira tools (switched on per agent by adding the name to the agent's tools).",
+        description: "Tools Foreman itself gives to agents on any runtime: progress reports and questions (always on), knowledge search and reading (on when the agent has knowledge assigned, see knowledge.assign), and Jira tools (switched on per agent by adding the name to the agent's tools).",
         readOnly: true,
         input: z.object({}),
-        handler: () => FOREMAN_TOOLS.map((t) => ({ ...toolInfo(t), alwaysOn: t.kind === "internal", guarded: t.kind === "custom-tool" })),
+        handler: () => FOREMAN_TOOLS.map((t) => ({ ...toolInfo(t), alwaysOn: t.kind === "internal", withKnowledge: t.group === "knowledge", guarded: t.kind === "custom-tool" })),
     }),
 ];

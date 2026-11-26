@@ -14,6 +14,7 @@ Files: `src/registry.ts` (machinery), `src/capabilities/*.ts` (definitions).
 | `notify.ts` | `notify.*`, `channels.*`, `notifyrules.*`, `mockteams.messages` / `clear` |
 | `teams.ts` | `teamsbot.*`, `mockteams.install` / `press` |
 | `vault.ts` | `secrets.*`, `system.agent_tools` |
+| `knowledge.ts` | `knowledge.*`, `confluence.*`, `mockconfluence.change` |
 | `ops.ts` | `triggers.*`, `insights.*`, `audit.list`, `system.*`, `capabilities.search` |
 
 ## Anatomy
@@ -31,7 +32,8 @@ defineCapability({
 ```
 
 - `ctx` is `Services` plus `actor`: `ctx.store`, `ctx.bus`, `ctx.engine`, `ctx.triggers`,
-  `ctx.work`, `ctx.mockJira`, `ctx.notify`, `ctx.vault`, `ctx.batches`, `ctx.bot`, `ctx.mockBot`, `ctx.runtimes`,
+  `ctx.work`, `ctx.mockJira`, `ctx.notify`, `ctx.vault`, `ctx.batches`, `ctx.bot`, `ctx.mockBot`, `ctx.knowledge`, `ctx.confluence`,
+  `ctx.mockConfluence`, `ctx.runtimes`,
   `ctx.registry`, `ctx.info`, `ctx.actor`.
 - `input` is the parsed value with defaults applied. `raw` is what the caller sent.
 - Return values are sent as JSON as they are. Do not return class instances.

@@ -11,6 +11,8 @@ import type { WorkHub } from "./work.ts";
 import type { Vault } from "./vault.ts";
 import type { BatchHub } from "./batches.ts";
 import type { MockBotFramework, TeamsBot } from "./teamsbot.ts";
+import type { KnowledgeHub } from "./knowledge.ts";
+import type { ConfluenceSync, MockConfluence } from "./confluence.ts";
 
 /** Who is calling. Every capability call is attributed and audited. */
 export interface Actor {
@@ -25,7 +27,7 @@ export interface BusEvents {
     event: [event: RunEvent];
     approval: [approval: Approval];
     /** Coarse "something in this collection changed" signal for live UIs. */
-    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify"];
+    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify" | "knowledge"];
     /** A work item changed state. */
     work: [item: WorkItem, previous: WorkState];
     /** Something a person should hear about that has no run or ticket behind it. */
@@ -50,6 +52,9 @@ export interface Services {
     batches: BatchHub;
     bot: TeamsBot;
     mockBot: MockBotFramework;
+    knowledge: KnowledgeHub;
+    confluence: ConfluenceSync;
+    mockConfluence: MockConfluence;
     runtimes: Record<string, RuntimeAdapter>;
     registry: Registry;
     info: { version: string; dataDir: string; baseUrl: string; startedAt: string };

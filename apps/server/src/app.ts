@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
-import { AgentSpec, CapabilityError, createForeman, mockModelReply, plainText, type Actor, type ForemanOptions } from "@foreman/core";
+import { AgentSpec, builtinEmbed, CapabilityError, createForeman, mockModelReply, plainText, type Actor, type ForemanOptions } from "@foreman/core";
 import { createMcpServer } from "./mcp.ts";
 
 export interface AppOptions extends ForemanOptions {
@@ -114,6 +114,46 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
         reply.raw.end("data: [DONE]\n\n");
         return reply.hijack();
     });
+
+    // Embeddings from the same mock endpoint, using the built-in word-part embedder.
+    app.post("/mock/model/v1/embeddings", async (req, reply) => {
+        const body = (req.body ?? {}) as { input?: string | string[]; model?: string };
+        const inputs = Array.isArray(body.input) ? body.input : typeof body.input === "string" ? [body.input] : null;
+        if (!inputs) return reply.code(400).send({ error: { message: "input must be a string or a list of strings" } });
+        const data = inputs.map((text, index) => ({ object: "embedding", index, embedding: Array.from(builtinEmbed(String(text))) }));
+        return { object: "list", data, model: body.model ?? "mock-embed", usage: { prompt_tokens: 0, total_tokens: 0 } };
+    });
+
+    // ── Mock Confluence: Confluence Data Center's REST shapes (v1), backed by memory ──
+    const { mockConfluence } = foreman;
+    const C = "/mock/confluence/rest/api";
+    const confluenceBase = `${options.baseUrl}/mock/confluence`;
+    type Paged = { Querystring: { start?: string; limit?: string; expand?: string; spaceKey?: string; title?: string; cql?: string; depth?: string } };
+    const paged = (q: Paged["Querystring"], items: unknown[]) => {
+        const start = Number(q.start ?? 0) || 0;
+        const limit = Math.min(Number(q.limit ?? 25) || 25, 200);
+        const results = items.slice(start, start + limit);
+        return { results, start, limit, size: results.length, _links: start + limit < items.length ? { next: `?start=${start + limit}&limit=${limit}` } : {} };
+    };
+    const pageMissing = (reply: any) => reply.code(404).send({ statusCode: 404, message: "No content found with that id" });
+    app.addHook("preHandler", async (req, reply) => {
+        if (mockConfluence.requiredAuth && req.url.startsWith(C) && req.headers.authorization !== mockConfluence.requiredAuth) return reply.code(401).send({ statusCode: 401, message: "Mock Confluence: wrong or missing credentials" });
+    });
+    app.get(`${C}/user/current`, async (req) => ({ type: "known", username: "mock", displayName: req.headers.authorization ? "Mock Confluence User" : "Anonymous (mock)" }));
+    app.get<Paged>(`${C}/space`, async (req) => paged(req.query, [...mockConfluence.spaces].map(([key, name]) => ({ key, name, type: "global" }))));
+    app.get<{ Params: { key: string } }>(`${C}/space/:key`, async (req, reply) => (mockConfluence.spaces.has(req.params.key) ? { key: req.params.key, name: mockConfluence.spaces.get(req.params.key) } : reply.code(404).send({ statusCode: 404, message: "No space with that key" })));
+    app.get<Paged & { Params: { key: string } }>(`${C}/space/:key/content/page`, async (req) => paged(req.query, mockConfluence.children(null, req.params.key).map((p) => mockConfluence.content(p, confluenceBase, req.query.expand))));
+    app.get<Paged>(`${C}/content/search`, async (req) => paged(req.query, mockConfluence.search(req.query.cql ?? "").map((p) => mockConfluence.content(p, confluenceBase, req.query.expand))));
+    app.get<Paged>(`${C}/content`, async (req) => {
+        const pages = [...mockConfluence.pages.values()].filter((p) => (!req.query.spaceKey || p.spaceKey === req.query.spaceKey) && (!req.query.title || p.title === req.query.title));
+        return paged(req.query, pages.map((p) => mockConfluence.content(p, confluenceBase, req.query.expand)));
+    });
+    app.get<Paged & { Params: { id: string } }>(`${C}/content/:id`, async (req, reply) => {
+        const page = mockConfluence.pages.get(req.params.id);
+        return page ? mockConfluence.content(page, confluenceBase, req.query.expand) : pageMissing(reply);
+    });
+    app.get<Paged & { Params: { id: string } }>(`${C}/content/:id/child/page`, async (req, reply) => (mockConfluence.pages.has(req.params.id) ? paged(req.query, mockConfluence.children(req.params.id).map((p) => mockConfluence.content(p, confluenceBase, req.query.expand))) : pageMissing(reply)));
+    app.get<Paged & { Params: { id: string } }>(`${C}/content/:id/descendant/page`, async (req, reply) => (mockConfluence.pages.has(req.params.id) ? paged(req.query, mockConfluence.descendants(req.params.id).map((p) => mockConfluence.content(p, confluenceBase, req.query.expand))) : pageMissing(reply)));
 
     // ── Mock Jira: the REST shapes of Jira Cloud, backed by memory ─────────
     const { mockJira } = foreman;

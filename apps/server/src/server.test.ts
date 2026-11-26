@@ -630,3 +630,95 @@ describe("Teams bot", () => {
         await call("teamsbot.configure", { enabled: false });
     });
 });
+
+describe("knowledge base", () => {
+    const call = async (name: string, input: unknown = {}) => {
+        const res = await rpc(name, input);
+        if (res.status !== 200) throw new Error(`${name} → ${res.status}: ${res.body.error}`);
+        return res.body.result;
+    };
+    const waitFor = async <T>(fn: () => Promise<T | undefined | false>, ms = 8000): Promise<T> => {
+        const until = Date.now() + ms;
+        for (;;) {
+            const value = await fn();
+            if (value) return value;
+            if (Date.now() > until) throw new Error("timed out waiting");
+            await new Promise((r) => setTimeout(r, 25));
+        }
+    };
+    const nodes = async () => (await call("knowledge.tree")).nodes as any[];
+    const byTitle = async (title: string) => (await nodes()).find((n) => n.title === title);
+
+    it("imports a Confluence page tree, follows edits, additions and deletions, and keeps exclusions", async () => {
+        await call("confluence.configure", { baseUrl: `${base}/mock/confluence`, flavor: "datacenter", syncMinutes: 0 });
+        expect((await call("confluence.test")).ok).toBe(true);
+        expect((await call("confluence.browse")).spaces.map((s: any) => s.key)).toEqual(["ENG", "PAY"]);
+        expect((await call("confluence.browse", { spaceKey: "ENG" })).pages[0].title).toBe("Engineering handbook");
+        expect((await call("confluence.browse", { query: "refund" })).pages.map((p: any) => p.title)).toContain("Refund policy");
+
+        const folder = await call("knowledge.create_folder", { title: "From Confluence" });
+        const root = await call("knowledge.import_confluence", { page: `${base}/mock/confluence/pages/viewpage.action?pageId=1001`, scope: "tree", parentId: folder.id });
+        expect(root).toMatchObject({ kind: "page", title: "Engineering handbook", parentId: folder.id });
+        expect((await rpc("knowledge.import_confluence", { page: "1001", scope: "page" })).status).toBe(409);
+        await waitFor(async () => (await byTitle("Engineering handbook"))?.import?.lastSyncAt);
+        const runbooks = await byTitle("Runbooks");
+        expect(runbooks.parentId).toBe(root.id);
+        expect((await byTitle("Deploying a service")).parentId).toBe(runbooks.id);
+        expect((await nodes()).filter((n) => n.sourceKind === "confluence")).toHaveLength(6);
+
+        const hit = (await call("knowledge.search", { query: "how do I roll back the billing service", nodeIds: [folder.id] })).hits[0];
+        expect(hit).toMatchObject({ title: "Deploying a service", path: "From Confluence › Engineering handbook › Runbooks" });
+        expect(hit.text).toContain("deployctl rollback billing");
+        expect(hit.url).toContain("pageId=1003");
+
+        // An editor changes one page, adds one and deletes one; a sync re-reads only what changed.
+        await call("mockconfluence.change", { action: "edit", pageId: "1006", appendText: "Circuit breakers open after five consecutive failures." });
+        await call("mockconfluence.change", { action: "add", pageId: "1002", title: "Rotating certificates", appendText: "Certificates are rotated by the cert-bot every 60 days." });
+        await call("mockconfluence.change", { action: "delete", pageId: "1004" });
+        const [report] = (await call("knowledge.sync", { nodeId: runbooks.id })).reports;
+        expect(report).toMatchObject({ added: 1, updated: 1, removed: 1, unchanged: 4, failed: 0, error: null });
+        expect((await call("knowledge.search", { query: "circuit breakers", nodeIds: [root.id] })).hits[0].title).toBe("Error handling");
+        expect((await byTitle("Rotating certificates")).parentId).toBe(runbooks.id);
+        expect(await byTitle("Incident response")).toBeUndefined();
+
+        // Removing a page of an import excludes it and what is beneath it; a sync leaves it out until it is included again.
+        const standards = await byTitle("Coding standards");
+        expect(await call("knowledge.remove", { nodeId: standards.id })).toMatchObject({ excluded: true, removed: 2 });
+        await call("knowledge.sync", { nodeId: root.id });
+        expect((await byTitle("Coding standards")).status).toBe("excluded");
+        expect(await byTitle("Error handling")).toBeUndefined();
+        expect((await call("knowledge.search", { query: "circuit breakers", nodeIds: [root.id] })).hits).toHaveLength(0);
+        await call("knowledge.include", { nodeId: standards.id });
+        await waitFor(async () => byTitle("Error handling"));
+
+        // Removing the page the import starts from removes the whole import.
+        expect(await call("knowledge.remove", { nodeId: root.id })).toMatchObject({ excluded: false, removed: 6 });
+        await call("knowledge.remove", { nodeId: folder.id });
+    });
+
+    it("imports a whole space and embeds through an OpenAI-compatible endpoint", async () => {
+        await call("knowledge.configure", { embeddings: { kind: "openai", baseUrl: `${base}/mock/model/v1`, model: "mock-embed" } });
+        expect(await call("knowledge.test_embeddings")).toMatchObject({ ok: true, dimensions: 384 });
+        const space = await call("knowledge.import_confluence", { spaceKey: "PAY", scope: "space" });
+        expect(space).toMatchObject({ kind: "folder", title: "Payments" });
+        await waitFor(async () => (await byTitle("Payments"))?.import?.lastSyncAt);
+        await foreman.knowledge.settled();
+        const status = await call("knowledge.status");
+        expect(status.embedded).toBe(status.passages);
+        expect(status.settings.embedderLabel).toContain("mock-embed");
+        const result = await call("knowledge.search", { query: "can a refund be cancelled after payout", nodeIds: [space.id] });
+        expect(result.mode).toBe("hybrid");
+        expect(result.hits[0].title).toBe("Refund FAQ");
+        expect(result.hits[0].matchedBy).toEqual(expect.arrayContaining(["keyword", "meaning"]));
+
+        // A model that cannot be reached leaves keyword search working and says why.
+        await call("knowledge.configure", { embeddings: { baseUrl: "http://127.0.0.1:9/v1" } });
+        const degraded = await call("knowledge.search", { query: "ledger currencies", nodeIds: [space.id] });
+        expect(degraded.hits[0].title).toBe("Ledger rules");
+        expect(degraded.note).toMatch(/keyword/);
+
+        await call("knowledge.configure", { embeddings: { kind: "builtin" } });
+        await call("knowledge.remove", { nodeId: space.id });
+        await call("confluence.configure", { baseUrl: "" });
+    });
+});

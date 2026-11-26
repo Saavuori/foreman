@@ -12,6 +12,9 @@ import { Vault } from "./vault.ts";
 import { NotifyHub } from "./notify.ts";
 import { MockBotFramework, TeamsBot } from "./teamsbot.ts";
 import { teamsCapabilities } from "./capabilities/teams.ts";
+import { knowledgeCapabilities } from "./capabilities/knowledge.ts";
+import { KnowledgeHub } from "./knowledge.ts";
+import { ConfluenceSync, MockConfluence } from "./confluence.ts";
 import { MockJira } from "./jira.ts";
 import { WorkHub } from "./work.ts";
 import { Engine } from "./engine.ts";
@@ -38,6 +41,9 @@ export { WorkHub, defaultRank, ruleMatches } from "./work.ts";
 export * from "./notify.ts";
 export { TeamsBot, MockBotFramework, TeamsBotSettings, decidedCard, type Activity, type BotConversation } from "./teamsbot.ts";
 export { Store } from "./store.ts";
+export { KnowledgeHub, KnowledgeSettings, EmbeddingSettings, type KnowledgeNode, type SearchHit, type SearchResult } from "./knowledge.ts";
+export { ConfluenceClient, ConfluenceSync, ConfluenceSettings, MockConfluence, parsePageRef, type ConfluenceRoot, type SyncReport } from "./confluence.ts";
+export { htmlToText, toPassages, builtinEmbed, ftsQuery } from "./extract.ts";
 
 export interface ForemanOptions {
     dataDir: string;
@@ -66,15 +72,18 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
     const triggers = new TriggerHub(store, engine, bus);
     const mockJira = new MockJira();
     const work = new WorkHub(store, engine, bus, { mockJiraUrl: `${options.baseUrl}/mock/jira`, baseUrl: options.baseUrl, vault });
-    engine.setToolHost({ jira: () => work.jira() });
+    const knowledge = new KnowledgeHub(store, bus, { vault });
+    const mockConfluence = new MockConfluence();
+    const confluence = new ConfluenceSync(store, bus, knowledge, { vault, mockUrl: `${options.baseUrl}/mock/confluence` });
+    engine.setToolHost({ jira: () => work.jira(), knowledge: () => knowledge });
     const notify = new NotifyHub(store, bus, { baseUrl: options.baseUrl, retryDelaysMs: options.notifyRetryDelaysMs, vault });
     const mockBot = new MockBotFramework(options.baseUrl, notify.mockTeams);
     const bot = new TeamsBot(store, bus, { baseUrl: options.baseUrl, vault, mock: mockBot });
     notify.setBot(bot);
     const batches = new BatchHub(store, bus, work, notify, { baseUrl: options.baseUrl });
     const registry = new Registry();
-    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...teamsCapabilities, ...vaultCapabilities, ...flowCapabilities, ...opsCapabilities);
-    const services: Services = { store, bus, engine, triggers, work, mockJira, notify, vault, batches, bot, mockBot, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
+    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...teamsCapabilities, ...knowledgeCapabilities, ...vaultCapabilities, ...flowCapabilities, ...opsCapabilities);
+    const services: Services = { store, bus, engine, triggers, work, mockJira, notify, vault, batches, bot, mockBot, knowledge, confluence, mockConfluence, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
     registry.bind(services);
     // A press in Teams is decided by the same capability as a click in Foreman, audited as the Teams user.
     bot.setDecider((approvalId, approve, reason, actor) => registry.invoke("approvals.decide", { approvalId, decision: approve ? "approve" : "deny", reason }, actor));
@@ -85,6 +94,8 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
             triggers.start();
             notify.start();
             bot.start();
+            knowledge.start();
+            confluence.start();
             batches.start();
             work.start();
         },
@@ -93,6 +104,10 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
             work.stop();
             batches.stop();
             bot.stop();
+            confluence.stop();
+            await confluence.settled();
+            knowledge.stop();
+            await knowledge.settled();
             notify.stop();
             await notify.settled();
             await work.settled();

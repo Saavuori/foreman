@@ -8,12 +8,14 @@ import { RunDetail } from "./pages/RunDetail.tsx";
 import { Work } from "./pages/Work.tsx";
 import { Notifications } from "./pages/Notifications.tsx";
 import { Secrets } from "./pages/Secrets.tsx";
+import { Knowledge } from "./pages/Knowledge.tsx";
 import { Lamp, Modal, ToastProvider } from "./ui.tsx";
 
 const NAV = [
     { path: "/", label: "Board", match: "" },
     { path: "/work", label: "Work", match: "work" },
     { path: "/agents", label: "Agents", match: "agents" },
+    { path: "/knowledge", label: "Knowledge", match: "knowledge" },
     { path: "/runs", label: "Runs", match: "runs" },
     { path: "/approvals", label: "Approvals", match: "approvals" },
     { path: "/notifications", label: "Notifications", match: "notifications" },
@@ -31,6 +33,8 @@ function Page({ route }: { route: string[] }) {
             return id === "batch" ? <Work batchId={route[2] ?? ""} /> : <Work itemId={id} />;
         case "agents":
             return id === "new" ? <NewAgent /> : id ? <AgentStudio key={id} agentId={id} /> : <Agents />;
+        case "knowledge":
+            return <Knowledge view={id} />;
         case "runs":
             return id ? <RunDetail key={id} runId={id} /> : <Runs />;
         case "notifications":
