@@ -987,6 +987,8 @@ table.grid th.num {
 }
 .wcard {
     position: relative;
+    /* The column scrolls; without this a long column squashes its cards instead. */
+    flex-shrink: 0;
     background: var(--surface);
     border: 1px solid var(--line);
     border-radius: var(--r);
