@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { htmlToText } from "./extract.ts";
 import type { KnowledgeHub, KnowledgeNode, NodeSource } from "./knowledge.ts";
@@ -158,12 +159,16 @@ export class ConfluenceSync {
     private timer?: ReturnType<typeof setInterval>;
     private running = new Map<string, Promise<SyncReport>>();
     progress = new Map<string, { done: number; total: number; startedAt: string }>();
+    webhook = { received: 0, lastAt: null as string | null };
+    private pending = { all: false, pageIds: new Set<string>() };
+    private flushTimer?: ReturnType<typeof setTimeout>;
+    private flushing: Promise<void> | null = null;
 
     constructor(
         private store: Store,
         private bus: Bus,
         private kb: KnowledgeHub,
-        private options: { vault: Vault; mockUrl: string },
+        private options: { vault: Vault; mockUrl: string; baseUrl: string; webhookDelayMs?: number },
     ) {}
 
     settings(): ConfluenceSettings {
@@ -204,8 +209,10 @@ export class ConfluenceSync {
     }
     stop() {
         clearInterval(this.timer);
+        clearTimeout(this.flushTimer);
     }
     async settled() {
+        await this.flushing;
         await Promise.allSettled([...this.running.values()]);
     }
     private schedule() {
@@ -214,6 +221,74 @@ export class ConfluenceSync {
         if (!minutes) return;
         this.timer = setInterval(() => void this.syncAll(), minutes * 60_000);
         this.timer.unref?.();
+    }
+
+    // ── webhook: instant updates ──────────────────────────────────────────
+    /** The secret in the webhook address. Created on first use and stored sealed. */
+    webhookSecret(): string {
+        const sealed = this.store.getSetting<string>("confluence.webhookSecret");
+        if (sealed) return this.options.vault.unseal(sealed);
+        return this.rotateWebhookSecret();
+    }
+    rotateWebhookSecret(): string {
+        const secret = randomBytes(24).toString("base64url");
+        this.store.setSetting("confluence.webhookSecret", this.options.vault.seal(secret));
+        this.bus.emit("change", "knowledge");
+        return secret;
+    }
+    webhookUrl(): string {
+        return `${this.options.baseUrl}/hooks/confluence/${this.webhookSecret()}`;
+    }
+    /**
+     * Confluence says a page changed. Its payload carries little more than the page id, which is
+     * used only to choose which imports to check — content is always read from Confluence itself.
+     * Calls are gathered for a moment, so an editing burst or a bulk move becomes one check.
+     */
+    nudge(payload: unknown): { accepted: boolean; reason?: string } {
+        this.webhook = { received: this.webhook.received + 1, lastAt: new Date().toISOString() };
+        this.bus.emit("change", "knowledge");
+        if (!this.roots().length) return { accepted: false, reason: "Nothing is imported from Confluence" };
+        const p = payload as { page?: { id?: unknown }; content?: { id?: unknown } } | null;
+        const id = String(p?.page?.id ?? p?.content?.id ?? "");
+        if (/^\d{1,20}$/.test(id)) this.pending.pageIds.add(id);
+        else this.pending.all = true;
+        clearTimeout(this.flushTimer);
+        this.flushTimer = setTimeout(() => {
+            this.flushing = this.flush().finally(() => (this.flushing = null));
+        }, this.options.webhookDelayMs ?? 2000);
+        this.flushTimer.unref?.();
+        return { accepted: true };
+    }
+    /** Check every import in the spaces the gathered pages belong to; all imports when that cannot be told. */
+    private async flush() {
+        const { all, pageIds } = this.pending;
+        this.pending = { all: false, pageIds: new Set() };
+        const roots = this.roots();
+        let targets = roots;
+        if (!all) {
+            const spaces = new Set<string>();
+            for (const pageId of pageIds) {
+                const known = this.kb.findExternal(`confluence:${pageId}`);
+                const root = known ? this.rootOf(known.id) : undefined;
+                if (root) {
+                    spaces.add((root.source as ConfluenceRoot).spaceKey);
+                    continue;
+                }
+                // A page not in the library yet: ask Confluence where it lives. Gone or hidden means look everywhere.
+                const page = await this.client().page(pageId).catch(() => null);
+                if (!page) {
+                    spaces.clear();
+                    break;
+                }
+                spaces.add(page.spaceKey);
+            }
+            if (spaces.size) targets = roots.filter((r) => spaces.has((r.source as ConfluenceRoot).spaceKey));
+        }
+        for (const root of targets) {
+            // A check already under way may have read the page before it changed: check once more after it.
+            const running = this.running.get(root.id);
+            void (running ?? Promise.resolve()).then(() => this.sync(root.id)).catch(() => {});
+        }
     }
 
     roots(): KnowledgeNode[] {
@@ -353,7 +428,37 @@ export class ConfluenceSync {
             report.error = e instanceof Error ? e.message : String(e);
             this.finish(rootId, { lastSyncAt: new Date().toISOString(), lastSyncError: report.error });
         }
+        this.alert(root, source.lastSyncError ?? null, report);
         return report;
+    }
+
+    /**
+     * Tell people when an import stops being kept current — once, when it goes from working to
+     * failing, not on every scheduled check. Agents meanwhile search the copy from the last good check.
+     */
+    private alert(root: KnowledgeNode, previousError: string | null, report: SyncReport) {
+        const at = new Date().toISOString();
+        // A few unreadable pages last time does not stop a whole failed check from being reported.
+        const wasFailing = !!previousError && !/ could not be read$/.test(previousError);
+        if (report.error && !wasFailing) {
+            this.bus.emit("notice", {
+                kind: "knowledge_sync_failed",
+                severity: "error",
+                title: `Confluence check failing: ${root.title}`,
+                text: `Foreman could not check “${root.title}” for changes: ${report.error}. Agents keep searching the copy from the last good check until this is fixed.`,
+                path: `/knowledge/${root.id}`,
+                dedupeKey: `confluence:${root.id}:${at}`,
+            });
+        } else if (!report.error && report.failed && !previousError) {
+            this.bus.emit("notice", {
+                kind: "knowledge_sync_failed",
+                severity: "warning",
+                title: `Some Confluence pages could not be read: ${root.title}`,
+                text: `${report.failed} page${report.failed === 1 ? "" : "s"} in “${root.title}” could not be read; the rest is up to date. The next check tries them again.`,
+                path: `/knowledge/${root.id}`,
+                dedupeKey: `confluence-pages:${root.id}:${at}`,
+            });
+        }
     }
 
     private async syncPage(client: ConfluenceClient, p: ConfluencePage, x: { rootId: string; topId: string | null; existing: Map<string, KnowledgeNode>; nodeFor: Map<string, string>; parent: string; report: SyncReport }) {
@@ -477,6 +582,7 @@ export class MockConfluence {
         if (change.appendText) page.body += `<p>${change.appendText.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>`;
         page.version++;
         page.when = new Date().toISOString();
+        this.announce("page_updated", page.id);
         return page;
     }
     add(parentId: string, title: string, text: string) {
@@ -484,12 +590,22 @@ export class MockConfluence {
         if (!parent) return null;
         const page: MockPage = { id: String(this.nextId++), spaceKey: parent.spaceKey, parentId, title, body: `<p>${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</p>`, version: 1, when: new Date().toISOString() };
         this.pages.set(page.id, page);
+        this.announce("page_created", page.id);
         return page;
     }
     delete(pageId: string) {
         if (!this.pages.has(pageId)) return false;
         for (const d of this.descendants(pageId)) this.pages.delete(d.id);
         this.pages.delete(pageId);
+        this.announce("page_removed", pageId);
         return true;
+    }
+
+    /** When set, each change is announced here as Confluence Data Center's webhooks do: mostly ids. */
+    webhookUrl: string | null = null;
+    private announce(event: string, pageId: string) {
+        if (!this.webhookUrl) return;
+        const body = { timestamp: Date.now(), event, userKey: "mock-editor", page: { id: Number(pageId) } };
+        void fetch(this.webhookUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) }).catch(() => {});
     }
 }

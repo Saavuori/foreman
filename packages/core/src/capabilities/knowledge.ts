@@ -382,6 +382,39 @@ export const knowledgeCapabilities = [
         },
     }),
     defineCapability({
+        name: "confluence.webhook",
+        title: "Confluence webhook address",
+        description:
+            "The address to give Confluence as a webhook (Data Center: Administration → Webhooks; events page created, updated, removed, trashed, restored and moved) so imports are checked within seconds of a change instead of at the next scheduled check. A call only makes Foreman check the imports in that page's space; page content is always read from Confluence. The address contains a secret. Needs Foreman to be reachable from Confluence.",
+        readOnly: true,
+        input: z.object({}),
+        handler: (ctx) => ({ url: ctx.confluence.webhookUrl(), received: ctx.confluence.webhook.received, lastReceivedAt: ctx.confluence.webhook.lastAt, mockSendsWebhooks: !!ctx.mockConfluence.webhookUrl }),
+    }),
+    defineCapability({
+        name: "confluence.rotate_webhook",
+        title: "Replace the Confluence webhook address",
+        description: "Make a new secret for the Confluence webhook address. The old address stops working at once, so Confluence must be given the new one.",
+        destructive: true,
+        input: z.object({}),
+        handler: (ctx) => {
+            const wasMock = !!ctx.mockConfluence.webhookUrl;
+            ctx.confluence.rotateWebhookSecret();
+            if (wasMock) ctx.mockConfluence.webhookUrl = ctx.confluence.webhookUrl();
+            return { url: ctx.confluence.webhookUrl() };
+        },
+    }),
+    defineCapability({
+        name: "mockconfluence.webhooks",
+        title: "Mock Confluence webhooks",
+        description: "Have the built-in mock Confluence call Foreman's webhook address whenever a page is edited, added or deleted, as a real Confluence webhook would.",
+        input: z.object({ enabled: z.boolean() }),
+        handler: (ctx, { enabled }) => {
+            ctx.mockConfluence.webhookUrl = enabled ? ctx.confluence.webhookUrl() : null;
+            ctx.bus.emit("change", "knowledge");
+            return { enabled };
+        },
+    }),
+    defineCapability({
         name: "mockconfluence.change",
         title: "Change the mock Confluence",
         description: "Edit, add or delete a page in the built-in mock Confluence, to see a sync pick it up. edit: pageId with title and/or appendText. add: pageId of the parent, title, and appendText as the body. delete: pageId (its sub-pages go too).",

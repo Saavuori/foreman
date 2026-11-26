@@ -24,7 +24,7 @@ const tool = async (name: string, args: Record<string, unknown> = {}) => {
 };
 
 beforeAll(async () => {
-    const built = await buildApp({ dataDir: "", baseUrl: "http://test", memory: true, simulatedStepDelayMs: 0, token: TOKEN, notifyRetryDelaysMs: [5, 5], runtimes: [new CopilotRuntime({ dataDir: mkdtempSync(join(tmpdir(), "foreman-test-")) })] });
+    const built = await buildApp({ dataDir: "", baseUrl: "http://test", memory: true, simulatedStepDelayMs: 0, token: TOKEN, notifyRetryDelaysMs: [5, 5], confluenceWebhookDelayMs: 20, runtimes: [new CopilotRuntime({ dataDir: mkdtempSync(join(tmpdir(), "foreman-test-")) })] });
     const { app } = built;
     foreman = built.foreman;
     foreman.start();
@@ -718,6 +718,51 @@ describe("knowledge base", () => {
         expect(degraded.note).toMatch(/keyword/);
 
         await call("knowledge.configure", { embeddings: { kind: "builtin" } });
+        await call("knowledge.remove", { nodeId: space.id });
+        await call("confluence.configure", { baseUrl: "" });
+    });
+
+    it("checks imports when Confluence calls the webhook, and tells people once when checks start failing", async () => {
+        await call("confluence.configure", { baseUrl: `${base}/mock/confluence`, syncMinutes: 0 });
+        const space = await call("knowledge.import_confluence", { spaceKey: "ENG", scope: "space" });
+        await waitFor(async () => (await byTitle("Engineering"))?.import?.lastSyncAt);
+        const hook = await call("confluence.webhook");
+        const url = hook.url.replace("http://test", base);
+        const post = (body: unknown, to = url) => fetch(to, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        expect((await post({ page: { id: 1005 } }, url.replace(/[^/]+$/, "wrong"))).status).toBe(404);
+
+        // Confluence's payload is mostly ids: a known page leads to its import, a new one is looked up.
+        await call("mockconfluence.change", { action: "edit", pageId: "1005", appendText: "Lint rules are enforced by the pre-merge pipeline." });
+        const res = await post({ timestamp: Date.now(), event: "page_updated", userKey: "u1", page: { id: 1005 } });
+        expect(res.status).toBe(202);
+        expect(await res.json()).toEqual({ accepted: true });
+        await waitFor(async () => (await call("knowledge.search", { query: "pre-merge pipeline lint", nodeIds: [space.id] })).hits[0]?.title === "Coding standards");
+        const added = await call("mockconfluence.change", { action: "add", pageId: "1002", title: "On-call handover", appendText: "Hand over the pager at 09:00 with open incidents listed." });
+        await post({ event: "page_created", page: { id: Number(added.pageId) } });
+        await waitFor(async () => byTitle("On-call handover"));
+        // A body that names no page still makes Foreman look.
+        await call("mockconfluence.change", { action: "delete", pageId: added.pageId });
+        await post({});
+        await waitFor(async () => !(await byTitle("On-call handover")));
+        // The call with the wrong secret is not counted.
+        expect((await call("confluence.webhook")).received).toBe(hook.received + 3);
+
+        // Checks that start failing reach the inbox once, not on every check.
+        const failing = async () => (await call("notify.inbox", { limit: 500 })).entries.filter((n: any) => n.kind === "knowledge_sync_failed" && n.title.includes("Engineering"));
+        foreman.mockConfluence.requiredAuth = "Bearer not-what-foreman-sends";
+        expect((await call("knowledge.sync", { nodeId: space.id })).reports[0].error).toMatch(/401/);
+        await call("knowledge.sync", { nodeId: space.id });
+        expect(await failing()).toHaveLength(1);
+        expect((await failing())[0]).toMatchObject({ severity: "error", title: "Confluence check failing: Engineering" });
+        expect((await byTitle("Engineering")).import.lastSyncError).toMatch(/401/);
+        // Back to working, then failing again: a new notice.
+        foreman.mockConfluence.requiredAuth = null;
+        expect((await call("knowledge.sync", { nodeId: space.id })).reports[0].error).toBeNull();
+        foreman.mockConfluence.requiredAuth = "Bearer not-what-foreman-sends";
+        await call("knowledge.sync", { nodeId: space.id });
+        expect(await failing()).toHaveLength(2);
+
+        foreman.mockConfluence.requiredAuth = null;
         await call("knowledge.remove", { nodeId: space.id });
         await call("confluence.configure", { baseUrl: "" });
     });

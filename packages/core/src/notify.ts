@@ -19,6 +19,7 @@ export const EVENT_KINDS = {
     ticket_aging: "Ticket waiting too long",
     intake_failed: "Jira check failing",
     jira_write_failed: "Jira update failed",
+    knowledge_sync_failed: "Confluence check failing",
     batch_done: "Batch finished",
     digest: "Daily digest",
     custom: "Message from an agent or person",

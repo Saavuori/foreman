@@ -87,13 +87,14 @@ export function startDemo(foreman: Foreman): () => void {
     created.set(reader.name, foreman.store.createAgent({ name: reader.name, description: reader.description, spec: AgentSpec.parse(reader.spec), note: "Demo agent", actor: "system:demo" }).agent.id);
     const teams = foreman.notify.createChannel({ name: "Agents (Teams preview)", kind: "mock_teams" });
     // Approvals and questions go to the bot instead, whose cards can be answered in place.
-    foreman.notify.createRule({ name: "Everything else a person should see", events: ["batch_done", "jira_write_failed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "digest", "custom"], channelId: teams.id });
+    foreman.notify.createRule({ name: "Everything else a person should see", events: ["batch_done", "jira_write_failed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "knowledge_sync_failed", "digest", "custom"], channelId: teams.id });
     foreman.bot.configure({ enabled: true, mock: true });
     foreman.notify.configure({ agingMinutes: 2 });
     foreman.work.updateSettings({ enabled: true, pollSeconds: 30, wipPerAgent: 2, writeBack: { enabled: true, statusStarted: "In Progress", statusReview: "In Review", statusDone: "Done" } });
     foreman.mockJira.setGenerator(5);
     // New mock tickets announce themselves by webhook, so they appear at once rather than on the next poll.
     foreman.mockJira.webhookUrl = foreman.work.webhookUrl();
+    foreman.mockConfluence.webhookUrl = foreman.confluence.webhookUrl();
     void foreman.work.poll().catch(() => {});
     // One batch to watch: the documentation tickets, tracked as a single job. It is created a
     // moment after start because the mock Jira is served by this same process.

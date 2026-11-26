@@ -74,6 +74,12 @@ export async function buildApp(options: AppOptions): Promise<{ app: FastifyInsta
         return reply.code(202).send(foreman.work.nudge());
     });
 
+    // ── Confluence webhook: authenticated by the secret in the path. Only the page id is read from the body. ──
+    app.post<{ Params: { secret: string } }>("/hooks/confluence/:secret", async (req, reply) => {
+        if (!safeEqual(req.params.secret, foreman.confluence.webhookSecret())) return reply.code(404).send({ error: "Unknown webhook" });
+        return reply.code(202).send(foreman.confluence.nudge(req.body));
+    });
+
     // ── Teams bot messaging endpoint: authenticated by the Bot Framework's signed token, checked in core ──
     app.post("/hooks/teams/messages", async (req, reply) => {
         const { status, body } = await foreman.bot.receive(req.headers.authorization, (req.body ?? {}) as any);

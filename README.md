@@ -133,7 +133,9 @@ files:
   whole space, picked from a browser of the site. Imports stay in step: Foreman checks for
   changes on a schedule (hourly by default) or when asked, re-reads only pages whose version
   changed, adds new ones and drops deleted ones. Removing a sub-page leaves it out of future
-  checks too, until it is put back.
+  checks too, until it is put back. Give Confluence the webhook address under Knowledge → Search
+  settings → Instant updates, and a change is searchable within seconds. If checks start
+  failing, the inbox gets a "Confluence check failing" notice, which a rule can send to Teams.
 - **Files and notes** — upload Markdown, text, CSV/JSON/YAML or HTML, or write a note in Foreman.
   PDF, Word, PowerPoint and pictures are planned, not built yet.
 

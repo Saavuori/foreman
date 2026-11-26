@@ -31,7 +31,7 @@ export interface BusEvents {
     /** A work item changed state. */
     work: [item: WorkItem, previous: WorkState];
     /** Something a person should hear about that has no run or ticket behind it. */
-    notice: [notice: { kind: "intake_failed" | "jira_write_failed" | "custom"; severity: "info" | "success" | "warning" | "error"; title: string; text: string; path: string; dedupeKey: string }];
+    notice: [notice: { kind: "intake_failed" | "jira_write_failed" | "knowledge_sync_failed" | "custom"; severity: "info" | "success" | "warning" | "error"; title: string; text: string; path: string; dedupeKey: string }];
 }
 export class Bus extends EventEmitter<BusEvents> {
     constructor() {

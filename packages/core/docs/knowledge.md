@@ -91,6 +91,22 @@ and removes pages that are gone. Pages under an excluded branch are skipped. Con
 the same import share one promise. The report is `{ added, updated, removed, unchanged, failed,
 error }`.
 
+**Instant updates.** `POST /hooks/confluence/:secret` (address from `confluence.webhook`, secret
+stored sealed in setting `confluence.webhookSecret`, replaced with `confluence.rotate_webhook`).
+Confluence Data Center's webhook payloads carry little more than the page id, and Foreman reads
+nothing else from them: the id only chooses which imports to check. `nudge` gathers calls for
+`webhookDelayMs` (2 s; option `confluenceWebhookDelayMs`), then `flush` finds each page's space
+— from the library if the page is known, otherwise by asking Confluence — and syncs every import
+in those spaces. A page that cannot be looked up, or a body without an id, means all imports.
+An import that is already syncing is synced once more afterwards, since that check may have
+read the page before it changed.
+
+**Failure notices.** `alert` raises a bus `notice` of kind `knowledge_sync_failed` when an
+import goes from working to failing: severity `error` when the whole check failed (Confluence
+unreachable, 401, the root page gone), `warning` when only some pages could not be read. The
+transition is judged from the import's stored `lastSyncError`, so a long outage gives one notice,
+also across restarts, and a fix followed by a new failure gives another.
+
 `htmlToText` understands storage format: code macros become fenced blocks, Jira macros their
 key, links their text, images `[image: name]`, tables `| a | b |` rows, headings `#` lines;
 layout and noise macros are dropped.
@@ -120,12 +136,14 @@ the tools in the demo.
 service, Incident response; Coding standards → Error handling) and PAY (Payments → Refund
 policy → Refund FAQ, Ledger rules) — and serves them through `/mock/confluence/rest/api/*` in
 `apps/server`. `mockconfluence.change` edits, adds or deletes a page so sync can be tested by
-hand or in a test. The mock CQL search understands only `title ~ "…"` and `space = KEY`.
+hand or in a test. With `mockconfluence.webhooks` (on in the demo) each change also calls the
+webhook address with a Data Center-shaped payload. The mock CQL search understands only `title ~ "…"` and `space = KEY`.
 
 ## What has never been run for real
 
 - A real Confluence (Data Center or Cloud). The client follows the REST v1 documentation and is
-  tested only against the mock.
+  tested only against the mock. The webhook payload follows the one example in Atlassian's Data
+  Center documentation (`page: { id }`); Cloud's webhooks are not handled differently.
 - A real embedding provider. `openai` and `azure` are tested against Foreman's mock endpoint
   `/mock/model/v1/embeddings`, which returns the built-in embedder's vectors.
 - Search quality on real content. There is no measurement yet (slice D).

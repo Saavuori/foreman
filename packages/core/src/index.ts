@@ -56,6 +56,8 @@ export interface ForemanOptions {
     simulatedStepDelayMs?: number;
     /** Delays between notification delivery retries (tests shorten them). */
     notifyRetryDelaysMs?: number[];
+    /** How long Confluence webhook calls are gathered before checking (tests shorten it). */
+    confluenceWebhookDelayMs?: number;
     /** Passphrase for the secrets vault. Without it a key file is kept in the data directory. */
     secretKey?: string;
 }
@@ -74,7 +76,7 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
     const work = new WorkHub(store, engine, bus, { mockJiraUrl: `${options.baseUrl}/mock/jira`, baseUrl: options.baseUrl, vault });
     const knowledge = new KnowledgeHub(store, bus, { vault });
     const mockConfluence = new MockConfluence();
-    const confluence = new ConfluenceSync(store, bus, knowledge, { vault, mockUrl: `${options.baseUrl}/mock/confluence` });
+    const confluence = new ConfluenceSync(store, bus, knowledge, { vault, mockUrl: `${options.baseUrl}/mock/confluence`, baseUrl: options.baseUrl, webhookDelayMs: options.confluenceWebhookDelayMs });
     engine.setToolHost({ jira: () => work.jira(), knowledge: () => knowledge });
     const notify = new NotifyHub(store, bus, { baseUrl: options.baseUrl, retryDelaysMs: options.notifyRetryDelaysMs, vault });
     const mockBot = new MockBotFramework(options.baseUrl, notify.mockTeams);

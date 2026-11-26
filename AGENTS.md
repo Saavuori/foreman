@@ -136,8 +136,8 @@ real service.
   tried. The simulated runtime is the default.
 - **Real Jira.** Sign-in, search, comments, transitions, subtasks and the webhook are tested only
   against the built-in mock.
-- **Real Confluence.** Import, sync, exclusions and the page picker are tested only against the
-  built-in mock (Data Center and Cloud paths alike).
+- **Real Confluence.** Import, sync, exclusions, the page picker and the webhook are tested only
+  against the built-in mock (Data Center and Cloud paths alike).
 - **Real embedding providers.** The OpenAI-compatible and Azure OpenAI embedders are tested
   only against the mock endpoint `/mock/model/v1/embeddings`. The default built-in embedder
   matches word parts, not meaning.

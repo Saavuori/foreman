@@ -31,6 +31,7 @@ something happens ──► NotifyEvent ──► inbox (always) ──► rules
 | `run_failed` | bus `run`, for runs that are not ticket attempts |
 | `ticket_aging` | `checkAging()`, once a minute |
 | `intake_failed`, `jira_write_failed`, `custom` | bus `notice`, or `notify.send` |
+| `knowledge_sync_failed` | bus `notice` from `ConfluenceSync`, when an import's check goes from working to failing |
 | `batch_done` | `BatchHub` |
 | `digest` | cron (`sendDigest`) |
 

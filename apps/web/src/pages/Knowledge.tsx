@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { go, rpc, useRpc } from "../api.ts";
-import { Empty, ErrorBanner, Field, Lamp, Modal, num, relTime, Segmented, useAction, useTick, useToast } from "../ui.tsx";
+import { CopyButton, Empty, ErrorBanner, Field, Lamp, Modal, num, relTime, Segmented, useAction, useTick, useToast } from "../ui.tsx";
 
 type Node = any;
 
@@ -726,6 +726,7 @@ function PickRow({ page, picked, onPick, browse, depth = 0 }: { page: any; picke
 function SearchSettings({ status }: { status: any }) {
     const secrets = useRpc<any>("secrets.list", {}, ["audit"]);
     const conn = useRpc<any>("confluence.status", {}, ["knowledge"]);
+    const hook = useRpc<any>("confluence.webhook", {}, ["knowledge"]);
     const { busy, run } = useAction();
     const [emb, setEmb] = useState<any>(null);
     const [cf, setCf] = useState<any>(null);
@@ -870,6 +871,39 @@ function SearchSettings({ status }: { status: any }) {
                     </div>
                 </div>
             </div>
+
+            {hook.data ? (
+                <div className="card">
+                    <div className="card-head" style={{ flexWrap: "wrap" }}>
+                        <h3>Instant updates</h3>
+                        <span className="grow" />
+                        <span className="muted" style={{ fontSize: 12.5 }}>
+                            {hook.data.received ? `${num(hook.data.received)} call${hook.data.received === 1 ? "" : "s"}, last ${relTime(hook.data.lastReceivedAt)}` : "Not called yet"}
+                        </span>
+                    </div>
+                    <div className="card-body stack">
+                        <span className="hint">
+                            Give this address to Confluence as a webhook (Data Center: Administration → Webhooks) for pages created, updated, removed, trashed, restored and moved. A change is then searchable within seconds instead of at the next check. Foreman checks the imports in that page's space and reads the pages from Confluence itself. Confluence must be able to reach Foreman.
+                        </span>
+                        <div className="row" style={{ gap: 8 }}>
+                            <code className="mono truncate grow" style={{ fontSize: 12.5 }} title="The end of the address is a secret">
+                                {hook.data.url.replace(/[^/]+$/, (s: string) => `••••${s.slice(-4)}`)}
+                            </code>
+                            <CopyButton text={hook.data.url} label="Copy address" />
+                            <button className="btn sm ghost danger" disabled={busy} onClick={() => confirm("Make a new address? The current one stops working at once, so Confluence must be given the new one.") && run(() => rpc("confluence.rotate_webhook").then(hook.reload), "New address made")}>
+                                Replace
+                            </button>
+                        </div>
+                        {conn.data?.usingMock ? (
+                            <label className="row" style={{ gap: 8 }}>
+                                <input type="checkbox" checked={hook.data.mockSendsWebhooks} disabled={busy} onChange={(e) => run(() => rpc("mockconfluence.webhooks", { enabled: e.target.checked }).then(hook.reload))} />
+                                <span>Mock Confluence calls this address whenever a page changes</span>
+                            </label>
+                        ) : null}
+                        <span className="hint">If a check fails — Confluence down, a token expired — the inbox gets a “Confluence check failing” notice. Send it to Teams with a rule under Notifications.</span>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

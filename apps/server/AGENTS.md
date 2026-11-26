@@ -26,6 +26,7 @@ first.
 | `POST /mcp` | MCP over Streamable HTTP, **stateless**: a new server per request. `GET`/`DELETE` answer 405 |
 | `POST /hooks/:id/:secret` | Webhook triggers. The secret in the path is the credential |
 | `POST /hooks/jira/:secret` | Jira webhook: makes Foreman check Jira now (`work.nudge`). The body is ignored on purpose |
+| `POST /hooks/confluence/:secret` | Confluence webhook: makes Foreman check the imports in the changed page's space (`ConfluenceSync.nudge`). Only the page id is read from the body |
 | `POST /hooks/teams/messages` | The Teams bot's messaging endpoint. Authenticated by the Bot Framework token, checked in `TeamsBot.receive` |
 | `/mock/jira/rest/api/:v/*` | Mock Jira (v3 as Cloud, v2 as Data Center) |
 | `GET /mock/jira/browse/:key` | A plain HTML page for a mock ticket — what "Open in Jira" links to |
@@ -114,7 +115,8 @@ delayed batch creation and the delayed mock-bot install).
 What the demo sets up beyond agents and rules: the Teams bot in mock mode, added to
 "Foreman demo › Approvals", with approvals and questions sent there (their cards have working
 buttons in the Teams preview); everything else to a Workflows-style preview channel; mock Jira
-announcing new tickets on the Jira webhook (polling only every 30 s); and "Model-backed reader",
+announcing new tickets on the Jira webhook (polling only every 30 s); mock Confluence calling the
+Confluence webhook on every page change; and "Model-backed reader",
 an agent on the real Copilot runtime with the mock model as its provider. A moment after start
 it also fills the knowledge library from the mock Confluence (the Engineering handbook page
 tree and the Payments space), adds a "Team notes" folder with a note, and gives agents their

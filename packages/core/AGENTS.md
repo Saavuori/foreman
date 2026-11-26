@@ -56,7 +56,7 @@ Hubs do not call each other's internals; they talk through the **Bus** (`registr
 | `event` | Engine | One trace event was appended |
 | `approval` | Engine | An approval or question was created or decided |
 | `work` | WorkHub | A work item changed state (`item`, `previous`) |
-| `notice` | WorkHub | Something to tell a person that has no run or ticket behind it |
+| `notice` | WorkHub, ConfluenceSync | Something to tell a person that has no run or ticket behind it |
 | `change` | anyone | "This collection changed" — drives live refresh in the UI |
 
 Adding a new hub: construct it in `createForeman`, add it to `Services` in `registry.ts` (so
