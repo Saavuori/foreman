@@ -12,6 +12,7 @@ import type { Vault } from "./vault.ts";
 import type { BatchHub } from "./batches.ts";
 import type { ConnectionHub } from "./connections.ts";
 import type { MockBotFramework, TeamsBot } from "./teamsbot.ts";
+import type { PowerPlatformHub } from "./powerplatform.ts";
 
 /** Who is calling. Every capability call is attributed and audited. */
 export interface Actor {
@@ -26,7 +27,7 @@ export interface BusEvents {
     event: [event: RunEvent];
     approval: [approval: Approval];
     /** Coarse "something in this collection changed" signal for live UIs. */
-    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify" | "setup" | "connections"];
+    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify" | "setup" | "connections" | "powerplatform"];
     /** A work item changed state. */
     work: [item: WorkItem, previous: WorkState];
     /** Something a person should hear about that has no run or ticket behind it. */
@@ -52,6 +53,7 @@ export interface Services {
     batches: BatchHub;
     bot: TeamsBot;
     mockBot: MockBotFramework;
+    powerPlatform: PowerPlatformHub;
     runtimes: Record<string, RuntimeAdapter>;
     registry: Registry;
     info: { version: string; dataDir: string; baseUrl: string; startedAt: string };

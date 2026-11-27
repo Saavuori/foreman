@@ -2,7 +2,8 @@
 
 Foreman is an orchestration app for autonomous agents: it takes work (mostly Jira tickets),
 routes it to an agent, runs the agent behind guardrails, asks a person when it must, and
-reports what happened. Everything a person can do in the UI can also be done over MCP.
+reports what happened. Everything a person can do in the UI can also be done over MCP. Its main
+users are a platform team administering a Power Platform tenant.
 
 Read this file first, then the guide for the part you are changing:
 
@@ -14,18 +15,21 @@ Read this file first, then the guide for the part you are changing:
 | Work queue, routing, Jira, batches, flow metrics | [packages/core/docs/work-queue.md](packages/core/docs/work-queue.md) |
 | Notifications, Teams cards, the Teams bot | [packages/core/docs/notifications.md](packages/core/docs/notifications.md) |
 | Secrets vault, redaction | [packages/core/docs/secrets.md](packages/core/docs/secrets.md) |
+| Power Platform tools, the practice tenant, environment guardrails | [packages/core/docs/power-platform.md](packages/core/docs/power-platform.md) |
 | The Copilot SDK adapter | [packages/runtime-copilot/AGENTS.md](packages/runtime-copilot/AGENTS.md) |
 | HTTP server, MCP endpoint, mock Jira/Teams routes, demo mode | [apps/server/AGENTS.md](apps/server/AGENTS.md) |
 | The web UI | [apps/web/AGENTS.md](apps/web/AGENTS.md) |
 
 `README.md` is the user-facing description. `PLAN.md` and `PLAN-2-work-queue.md` are the
-design and build order; all of plan 2 (slices A–F) is built.
+design and build order; all of plan 2 (slices A–F) is built. `PLAN-3-power-platform.md` is the
+Power Platform design; its status section says what is built.
 
 ## Layout
 
 ```
 packages/core             Everything that is not transport or pixels: store, engine, policy,
-                          work queue, Jira client + mock, notifications, vault, capabilities
+                          work queue, Jira client + mock, Power Platform client + practice
+                          tenant, notifications, vault, capabilities
 packages/runtime-copilot  Adapter that runs agents on the GitHub Copilot SDK
 apps/server               Fastify: /api/rpc, /api/stream (SSE), /mcp, /hooks, /mock/*, static UI
 apps/web                  React 19 + Vite UI, hand-written CSS
@@ -103,6 +107,11 @@ These are deliberate. Do not weaken one as a side effect of another change.
 7. Inbound messages to the Teams bot are accepted only with a valid Bot Framework token, and
    only a verified message may record a conversation — its service URL receives the bot's token.
    There is no switch to skip the check.
+8. Agents reach Power Platform only through Foreman's `pp_*` tools; they never get a shell
+   command, a token or a raw write path for it. Reads use the reader identity. A change needs the
+   agent on the operator identity, is refused on a protected environment whatever the rules say,
+   and a destructive one (copy, restore, reset, delete) is denied until a rule names it. No tool
+   changes role assignments in Power Platform itself or app registrations.
 
 ## Things that are easy to get wrong
 
@@ -135,6 +144,10 @@ real service.
 - **Real Teams.** Workflows-webhook cards and the Teams bot (token checks, sending, updating,
   button presses) follow Microsoft's documented formats and are tested over HTTP against the
   mock Bot Framework only. No Entra app registration has been used.
+- **Real Power Platform.** Sign-in, the management API (api-version 2024-10-01), Dataverse user
+  and role calls, `ValidateOnly` and long operations are tested only against the practice tenant
+  (`MockPowerPlatform`), in-process and over HTTP. Its role-based access for service principals
+  is a Microsoft preview.
 
 ## Git
 

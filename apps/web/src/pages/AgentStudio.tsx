@@ -358,14 +358,38 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                             <div className="field">
                                 <span className="label">Foreman tools</span>
                                 <div className="row wrap" style={{ gap: 6 }}>
-                                    {(ownTools.data ?? []).map((t) => (
-                                        <button key={t.name} type="button" className="chip" aria-pressed={t.alwaysOn || spec.tools.includes(t.name)} disabled={t.alwaysOn} title={`${t.description}${t.alwaysOn ? " Always available." : t.guarded ? " Changes a ticket, so the guardrails apply." : ""}`} onClick={() => toggleTool(t.name)}>
-                                            {t.name}
-                                        </button>
-                                    ))}
+                                    {(ownTools.data ?? [])
+                                        .filter((t) => t.group !== "powerplatform")
+                                        .map((t) => (
+                                            <button key={t.name} type="button" className="chip" aria-pressed={t.alwaysOn || spec.tools.includes(t.name)} disabled={t.alwaysOn} title={`${t.description}${t.alwaysOn ? " Always available." : t.guarded ? " Changes a ticket, so the guardrails apply." : ""}`} onClick={() => toggleTool(t.name)}>
+                                                {t.name}
+                                            </button>
+                                        ))}
                                 </div>
                                 <span className="hint">
                                     Work on any runtime. Every agent can report progress and ask a person a question. The Jira tools act on the site set under Work → Routing &amp; intake; add a guardrail such as <code className="mono">jira_transition → ask</code> to keep a person in the loop.
+                                </span>
+                            </div>
+                            <div className="field">
+                                <span className="label">Power Platform tools</span>
+                                {(["read", "custom-tool", "destructive"] as const).map((kind) => (
+                                    <div key={kind} className="row wrap" style={{ gap: 6, alignItems: "center" }}>
+                                        <span className="hint" style={{ width: 92 }}>{kind === "read" ? "Read" : kind === "custom-tool" ? "Change" : "Destructive"}</span>
+                                        {(ownTools.data ?? [])
+                                            .filter((t) => t.group === "powerplatform" && t.kind === kind)
+                                            .map((t) => (
+                                                <button key={t.name} type="button" className="chip" aria-pressed={spec.tools.includes(t.name)} title={`${t.description}${kind === "destructive" ? " Denied unless a guardrail rule allows or asks." : ""}`} onClick={() => toggleTool(t.name)}>
+                                                    {t.name.replace(/^pp_/, "")}
+                                                </button>
+                                            ))}
+                                    </div>
+                                ))}
+                                <div className="row" style={{ gap: 10, alignItems: "center", marginTop: 4 }}>
+                                    <span className="label" style={{ margin: 0 }}>Signs in as</span>
+                                    <Segmented label="Power Platform connection" value={spec.powerPlatform?.connection ?? "reader"} onChange={(connection) => set({ powerPlatform: { connection } })} options={[{ value: "reader", label: "Reader (read only)" }, { value: "operator", label: "Operator (may change)" }]} />
+                                </div>
+                                <span className="hint">
+                                    Act on the tenant set under <a href="#/powerplatform">Power Platform</a>. Change and destructive tools work only when the agent signs in as the operator, never on a protected environment, and always through the guardrails below. Destructive tools are denied until a rule such as <code className="mono">pp_env_reset@sandbox → ask</code> lets them through.
                                 </span>
                             </div>
                             <JsonField label="MCP servers" rows={4} emptyAs={{}} value={Object.keys(spec.mcpServers).length ? spec.mcpServers : undefined} onChange={(mcpServers) => set({ mcpServers })} hint='Keyed by name, e.g. {"github": {"type": "http", "url": "https://…"}} or {"files": {"type": "stdio", "command": "npx", "args": ["…"]}}. Put {{secret:NAME}} where a key goes; the value comes from Secrets when the run starts.' />
@@ -406,7 +430,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                                     </button>
                                 </div>
                                 <span className="hint">
-                                    Checked top to bottom before the autonomy level. Patterns match an action kind (<span className="mono">read write shell mcp url</span>) or <span className="mono">kind:tool</span>; <span className="mono">*</span> is a wildcard.
+                                    Checked top to bottom before the autonomy level. Patterns match an action kind (<span className="mono">read write shell mcp url destructive</span>), <span className="mono">kind:tool</span> or a tool name; <span className="mono">*</span> is a wildcard. Add <span className="mono">@</span> to name what a Power Platform tool acts on: <span className="mono">pp_env_reset@sandbox</span>, <span className="mono">*@group:Finance</span>, <span className="mono">pp_access_grant@role:Basic User</span>.
                                 </span>
                             </div>
                         </section>

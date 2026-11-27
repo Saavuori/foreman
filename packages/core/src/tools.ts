@@ -1,28 +1,56 @@
 import { z, type ZodType } from "zod";
 import type { JiraClient } from "./jira.ts";
-import type { Run } from "./schemas.ts";
+import type { PowerPlatformHub } from "./powerplatform.ts";
+import { POWER_PLATFORM_TOOLS } from "./pptools.ts";
+import type { AgentSpec, Run } from "./schemas.ts";
 
 /** What a Foreman tool can reach while it runs for one run. */
 export interface ToolContext {
     run: Run;
+    spec: AgentSpec;
+    /** Aborts when the run is cancelled or times out. */
+    signal: AbortSignal;
     emit(type: string, data: unknown): void;
     /** Put a question to a person and wait. Null when nobody answered in time. */
     ask(question: string): Promise<string | null>;
     jira(): JiraClient;
+    powerPlatform(): PowerPlatformHub;
+    /** What the tool's `prepare` found, handed on to its handler. */
+    prepared?: unknown;
+}
+
+/** What a tool found out before the guardrail check. */
+export interface Prepared {
+    /** Facts guardrail rules can match as `tool@fact` (environment type, group …). */
+    targets?: string[];
+    /** Replaces `summary(args)` in the approval: name things by what they are, with what was checked. */
+    summary?: string;
+    /** Set when the action must not happen whatever the guardrails say (a protected environment). */
+    refuse?: string;
+    /** Anything the handler needs, so it does not look it up twice. */
+    data?: unknown;
 }
 
 export interface ForemanTool<I extends ZodType = ZodType> {
     name: string;
     title: string;
     description: string;
-    /** `read` and `custom-tool` go through the agent's guardrails; `internal` tools only talk to Foreman. */
-    kind: "read" | "custom-tool" | "internal";
+    /**
+     * `read`, `custom-tool` and `destructive` go through the agent's guardrails; `internal` tools
+     * only talk to Foreman. `destructive` (delete, reset, overwrite) is denied by every autonomy
+     * preset except `full`, so it needs an explicit rule.
+     */
+    kind: "read" | "custom-tool" | "destructive" | "internal";
+    /** Where the tool shows up in the agent studio. */
+    group: "foreman" | "jira" | "powerplatform";
     input: I;
     /** One line a person can approve from. */
     summary(args: z.output<I>): string;
+    /** Runs before the guardrail check. Throw to fail the call with a message for the agent. */
+    prepare?(ctx: ToolContext, args: z.output<I>): Promise<Prepared>;
     handler(ctx: ToolContext, args: z.output<I>): Promise<string>;
 }
-const tool = <I extends ZodType>(t: ForemanTool<I>) => t as unknown as ForemanTool;
+const tool = <I extends ZodType>(t: Omit<ForemanTool<I>, "group">, group: ForemanTool["group"] = "jira") => ({ ...t, group }) as unknown as ForemanTool;
 
 const Key = z.string().min(1).describe("Ticket key, e.g. PAY-123");
 const clip = (s: string, n = 120) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
@@ -44,7 +72,7 @@ export const FOREMAN_TOOLS: ForemanTool[] = [
             ctx.emit("foreman.progress", { step: Math.min(a.step, a.total), total: a.total, message: a.message });
             return "Noted.";
         },
-    }),
+    }, "foreman"),
     tool({
         name: "ask_for_info",
         title: "Ask a person",
@@ -57,7 +85,7 @@ export const FOREMAN_TOOLS: ForemanTool[] = [
             if (answer === null) throw new Error("Nobody answered in time.");
             return answer;
         },
-    }),
+    }, "foreman"),
     tool({
         name: "jira_get_issue",
         title: "Jira: read a ticket",
@@ -115,6 +143,7 @@ export const FOREMAN_TOOLS: ForemanTool[] = [
             return `Created ${created.key} (${created.url}).`;
         },
     }),
+    ...POWER_PLATFORM_TOOLS,
 ];
 
 export const foremanTool = (name: string) => FOREMAN_TOOLS.find((t) => t.name === name);
@@ -126,8 +155,10 @@ export interface ToolInfo {
     title: string;
     description: string;
     kind: ForemanTool["kind"];
+    /** "connection" for a command-line tool that comes from one of the agent's connections. */
+    group: ForemanTool["group"] | "connection";
     parameters: Record<string, unknown>;
     /** Arguments a simulated run calls the tool with. */
     example?: Record<string, unknown>;
 }
-export const toolInfo = (t: ForemanTool): ToolInfo => ({ name: t.name, title: t.title, description: t.description, kind: t.kind, parameters: z.toJSONSchema(t.input, { io: "input" }) as Record<string, unknown> });
+export const toolInfo = (t: ForemanTool): ToolInfo => ({ name: t.name, title: t.title, description: t.description, kind: t.kind, group: t.group, parameters: z.toJSONSchema(t.input, { io: "input" }) as Record<string, unknown> });

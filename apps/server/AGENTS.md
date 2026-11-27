@@ -33,6 +33,7 @@ first.
 | `POST /mock/teams/:channel` | Accepts what a Teams Workflows webhook accepts |
 | `/mock/botframework/*` | Mock Bot Framework: `openid`, `keys`, `login/:tenant/oauth2/v2.0/token`, and the connector's `v3/conversations/:id/activities` (POST, PUT), which check the mock's own tokens |
 | `POST /mock/model/v1/chat/completions` | Mock model: an OpenAI-compatible endpoint for running the Copilot runtime with no key (`mockModelReply`) |
+| `/mock/powerplatform/*` | The practice Power Platform tenant over HTTP: `login/:tenant/oauth2/v2.0/token`, `environmentmanagement/*`, `dataverse/:env/api/data/v9.2/*`. Foreman itself uses it in-process; this route lets a test or a person drive the real HTTP client against it |
 | everything else | The built UI from `apps/web/dist`, with `index.html` as the fallback |
 
 **App functionality never gets its own route.** If the UI or an agent needs something, add a

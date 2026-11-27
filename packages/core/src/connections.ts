@@ -172,7 +172,7 @@ export const CONNECTION_PRESETS: ConnectionPreset[] = [
         id: "power-platform-cli",
         name: "Power Platform CLI (pac)",
         kind: "cli",
-        description: "Runs `pac` commands for the agent. Listing is allowed, deleting and changing sign-in are refused, anything else waits for approval.",
+        description: "Runs `pac` commands for the agent. Listing is allowed, deleting and changing sign-in are refused, anything else waits for approval. For administering environments, users and roles, the tools under Power Platform are better: separate reader and operator sign-ins and protected environments.",
         needs: "The Power Platform CLI on the server, signed in with `pac auth create`.",
         fields: [],
         build: () => ({

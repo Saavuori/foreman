@@ -3,7 +3,8 @@
 Orchestration for autonomous agents on the GitHub Copilot SDK. Configure agents, triggers and
 guardrails in a web UI; every action is also an MCP tool.
 
-Plans: [PLAN.md](PLAN.md) (overall), [PLAN-2-work-queue.md](PLAN-2-work-queue.md) (Jira, Teams, mock).
+Plans: [PLAN.md](PLAN.md) (overall), [PLAN-2-work-queue.md](PLAN-2-work-queue.md) (Jira, Teams, mock),
+[PLAN-3-power-platform.md](PLAN-3-power-platform.md) (Power Platform administration).
 
 ![The Board: approvals and a question waiting on a person, run totals for the last day, and what is on shift now](docs/screenshots/board.png)
 
@@ -116,7 +117,8 @@ studio's Tools section. A change to a connection reaches every agent that uses i
 - **Presets** for Jira (Foreman's own tools), Confluence Data Center and Cloud (the
   `mcp-atlassian` MCP server), the Azure CLI, the Power Platform CLI (`pac`), the Azure MCP
   server, and any other command-line tool or MCP server. Tokens typed into a preset go straight
-  into the encrypted vault.
+  into the encrypted vault. For administering a Power Platform tenant, prefer the dedicated tools
+  below: they have per-agent identities and protected environments, which `pac` cannot give.
 - **Rules per connection.** For a command line, word patterns: the Azure CLI preset allows
   `az * list` and `az * show`, never allows `az * delete` or `az login`, and asks a person for
   anything else. For an MCP server, its tool names. An agent's own guardrail rules come first.
@@ -134,6 +136,31 @@ folder, not in a repository or the agent's workspace, so tools that act on local
 `git log`) need the path in their arguments. None of the presets has been run
 against a real Azure tenant, Power Platform environment or Confluence yet; only the command
 runner, the rules and the MCP test (against Foreman's own MCP endpoint) are tested.
+
+## Power Platform administration
+
+For a platform team running a Power Platform tenant. Agents get named tools, switched on per
+agent like the Jira tools — they never run `pac`, PowerShell or raw HTTP, and never hold a token:
+
+| Kind | Tools |
+|---|---|
+| Read | `pp_env_list`, `pp_env_get`, `pp_env_groups`, `pp_operations`, `pp_backups`, `pp_settings_get`, `pp_env_users`, `pp_env_roles`, `pp_api_get` (any GET, read-only identity) |
+| Change | `pp_env_backup`, `pp_env_create`, `pp_env_add_to_group`, `pp_env_managed`, `pp_access_grant`, `pp_access_revoke` |
+| Destructive | `pp_env_copy`, `pp_env_restore`, `pp_env_reset`, `pp_env_delete` — denied until a rule names them |
+
+Control comes in layers. Foreman signs in as one of two app registrations: a **reader** (give it
+*Power Platform reader*) for every read, and an **operator** (*Power Platform contributor*) only
+for agents set to it. **Protected** environments — production and the default environment unless
+switched off, plus any on the list — refuse every change whatever the rules say. Guardrail rules
+can **name the environment**: `pp_env_reset@sandbox → ask`, `*@group:Finance → ask`,
+`pp_access_grant@role:Basic User → allow`. Before asking, a tool looks the environment up and,
+where Power Platform can, checks the change with it, so an approval reads "Reset HR Dev (sandbox,
+group HR) … Checked: would be accepted".
+
+Until you set the API address under **Power Platform**, everything runs against a built-in
+practice tenant with seven environments, users, roles and backups. The sample data adds three
+platform agents and five platform tickets (project PLAT) to the practice Jira. Not tried against a
+real tenant yet; see [the area guide](packages/core/docs/power-platform.md) for what is unverified.
 
 ## Secrets
 

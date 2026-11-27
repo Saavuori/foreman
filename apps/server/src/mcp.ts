@@ -23,7 +23,8 @@ Typical flows:
 - Tune: insights_summary and insights_tool_usage → agents_update with activate=false → runs_start with revisionId → revisions_activate.
 Agents default to autonomy "propose": writes wait in approvals_list until approvals_decide. New agents use runtime "simulated" (a mock that calls no model); set spec.runtime to "copilot" for real runs, either with Copilot access or with spec.provider naming a model endpoint and a stored key (secrets_set) — then spec.model must be the provider's model id, not "auto".
 - Tools: connections_presets → secrets_set (for any token) → connections_create { preset, name, values } → connections_test → agents_update { spec: { connections: [id] } }. A command-line connection reaches the agent as a tool run_<key>, each command checked against the connection's rules.
-- Teams: teamsbot_status → teamsbot_configure → channels_create kind "teams_bot" → notifyrules_create, so approvals and questions can be decided from a Teams card.`;
+- Teams: teamsbot_status → teamsbot_configure → channels_create kind "teams_bot" → notifyrules_create, so approvals and questions can be decided from a Teams card.
+- Power Platform: powerplatform_settings → powerplatform_configure (tenant, reader and operator app ids, secret names) → powerplatform_test → powerplatform_environments. Agents get pp_* tools in spec.tools; changes need spec.powerPlatform.connection "operator"; guardrail rules can name the environment, e.g. pp_env_reset@sandbox → ask, *@group:Finance → ask. Protected environments refuse every change.`;
 
 const PROMPTS = [
     {

@@ -15,6 +15,9 @@ import { Vault } from "./vault.ts";
 import { NotifyHub } from "./notify.ts";
 import { MockBotFramework, TeamsBot } from "./teamsbot.ts";
 import { teamsCapabilities } from "./capabilities/teams.ts";
+import { powerPlatformCapabilities } from "./capabilities/powerplatform.ts";
+import { MockPowerPlatform } from "./mockpowerplatform.ts";
+import { PowerPlatformHub } from "./powerplatform.ts";
 import { MockJira } from "./jira.ts";
 import { WorkHub } from "./work.ts";
 import { Engine } from "./engine.ts";
@@ -44,6 +47,8 @@ export { WorkHub, defaultRank, ruleMatches } from "./work.ts";
 export * from "./notify.ts";
 export { TeamsBot, MockBotFramework, TeamsBotSettings, decidedCard, type Activity, type BotConversation } from "./teamsbot.ts";
 export { Store } from "./store.ts";
+export { PowerPlatformHub, PowerPlatformClient, PowerPlatformError, PP_API_VERSION, type PpEnvironment, type PpGroup, type PpConnection } from "./powerplatform.ts";
+export { MockPowerPlatform, MOCK_PP_ORIGIN, MOCK_PP_TENANT, MOCK_PP_PRINCIPALS, type MockHttpRequest, type MockHttpResponse } from "./mockpowerplatform.ts";
 
 export interface ForemanOptions {
     dataDir: string;
@@ -75,15 +80,16 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
     const triggers = new TriggerHub(store, engine, bus);
     const mockJira = new MockJira();
     const work = new WorkHub(store, engine, bus, { mockJiraUrl: `${options.baseUrl}/mock/jira`, baseUrl: options.baseUrl, vault });
-    engine.setToolHost({ jira: () => work.jira() });
+    const powerPlatform = new PowerPlatformHub(store, bus, { vault, mock: new MockPowerPlatform() });
+    engine.setToolHost({ jira: () => work.jira(), powerPlatform: () => powerPlatform });
     const notify = new NotifyHub(store, bus, { baseUrl: options.baseUrl, retryDelaysMs: options.notifyRetryDelaysMs, vault });
     const mockBot = new MockBotFramework(options.baseUrl, notify.mockTeams);
     const bot = new TeamsBot(store, bus, { baseUrl: options.baseUrl, vault, mock: mockBot });
     notify.setBot(bot);
     const batches = new BatchHub(store, bus, work, notify, { baseUrl: options.baseUrl });
     const registry = new Registry();
-    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...teamsCapabilities, ...vaultCapabilities, ...flowCapabilities, ...setupCapabilities, ...connectionCapabilities, ...opsCapabilities);
-    const services: Services = { store, bus, engine, connections, triggers, work, mockJira, notify, vault, batches, bot, mockBot, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
+    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...teamsCapabilities, ...vaultCapabilities, ...flowCapabilities, ...setupCapabilities, ...connectionCapabilities, ...powerPlatformCapabilities, ...opsCapabilities);
+    const services: Services = { store, bus, engine, connections, triggers, work, mockJira, notify, vault, batches, bot, mockBot, powerPlatform, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
     registry.bind(services);
     // A press in Teams is decided by the same capability as a click in Foreman, audited as the Teams user.
     bot.setDecider((approvalId, approve, reason, actor) => registry.invoke("approvals.decide", { approvalId, decision: approve ? "approve" : "deny", reason }, actor));

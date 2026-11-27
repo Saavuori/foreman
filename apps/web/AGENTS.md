@@ -25,6 +25,7 @@ first.
 | `src/pages/Notifications.tsx` | Inbox, Teams preview, channels & rules, delivery log |
 | `src/pages/Connections.tsx` | Connections: add from a preset (secret fields go to `secrets.set` first), test, rules, delete. Agents pick them under Tools in the studio |
 | `src/pages/Secrets.tsx` | Secrets |
+| `src/pages/PowerPlatform.tsx` | Power Platform: connection (reader and operator identities), environments and protection, which agents use it |
 | `src/pages/Connect.tsx` | MCP connection details and the capability console |
 
 ## Data: one way in, one way out

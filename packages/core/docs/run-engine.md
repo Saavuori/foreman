@@ -39,20 +39,26 @@ first. Do not bypass `emit` to write events.
 
 ## Guardrails (`policy.ts`)
 
-`authorize({ kind, toolName, summary, request })` is the only gate. `evaluatePolicy`:
+`authorize({ kind, toolName, targets, summary, request })` is the only gate. `evaluatePolicy`:
 
 1. Try `spec.policy.rules` top to bottom. A rule's `match` is a glob tested against `kind`,
-   `kind:toolName` and `toolName`. First match wins.
+   `kind:toolName` and `toolName` — or, when the pattern contains `@`, against the same with
+   `@<target>` appended for each of the request's `targets` (`pp_env_reset@sandbox`,
+   `*@group:HR`). First match wins.
 2. Otherwise the subject's `fallback`, if given: a connection's own verdict for a command
    (see Connections below). The agent's rules still come first, so a person can override it.
 3. Otherwise the autonomy preset decides:
 
-| Preset | read | write, mcp, url, custom-tool, memory | shell |
-|---|---|---|---|
-| `observe` | allow | deny | deny |
-| `propose` | allow | ask | ask |
-| `act` | allow | allow | ask |
-| `full` | allow | allow | allow |
+| Preset | read | write, mcp, url, custom-tool, memory | shell | destructive |
+|---|---|---|---|---|
+| `observe` | allow | deny | deny | deny |
+| `propose` | allow | ask | ask | deny |
+| `act` | allow | allow | ask | deny |
+| `full` | allow | allow | allow | allow |
+
+`destructive` (deleting, resetting, overwriting) is never a preset's call below `full`: a person
+writes a rule for it. `targets` are facts a tool looked up about what it acts on (see
+[power-platform.md](power-platform.md)).
 
 `ask` creates an approval, sets the run to `waiting_approval`, and waits up to
 `policy.approvalTimeoutSeconds`. A timeout or a stopped run counts as a refusal.
@@ -152,13 +158,17 @@ Tools Foreman provides on every runtime, defined once in `FOREMAN_TOOLS`:
 | `ask_for_info` | internal | Asks a person and waits; always available |
 | `jira_get_issue`, `jira_search` | read | Switched on per agent |
 | `jira_add_comment`, `jira_transition`, `jira_create_subtask` | custom-tool | Switched on per agent; guardrails apply |
+| `pp_*` (Power Platform) | read, custom-tool, destructive | Switched on per agent; see [power-platform.md](power-platform.md) |
 
 `internal` tools skip the policy check because they only talk to Foreman. The others are
 enabled by listing the name in `spec.tools`, and are authorised as `kind` + `toolName`, so a
 rule `jira_transition → ask` works.
 
-Adding a tool: append to `FOREMAN_TOOLS` with a zod `input`, a `summary(args)` for approvals and
-a `handler(ctx, args)` returning text. `ctx` gives `run`, `emit`, `ask` and `jira()`. If it
+Adding a tool: append to `FOREMAN_TOOLS` with a zod `input`, a `group`, a `summary(args)` for
+approvals and a `handler(ctx, args)` returning text. Optionally a `prepare(ctx, args)` runs before
+the guardrail check and returns `targets`, a better `summary`, a `refuse` reason (refused without
+asking anyone) and `data` handed to the handler as `ctx.prepared`. `ctx` gives `run`, `spec`,
+`signal`, `emit`, `ask`, `jira()` and `powerPlatform()`. If it
 needs something else, extend `ToolContext` and supply it in `Engine.execute` (the tool host is
 set with `engine.setToolHost` in `index.ts`). Throw to report failure. It then shows up in the
 agent studio, in `system.agent_tools`, in the mock runtime and in the Copilot adapter with no

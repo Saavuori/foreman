@@ -171,6 +171,16 @@ ${f.comment.comments.map((c) => `<div style="border-left:3px solid #d5dbe1;paddi
         );
     });
 
+    // ── Practice Power Platform tenant: management API, Dataverse and sign-in (unauthenticated, like the other mocks) ──
+    // The same handler answers Foreman in-process; serving it here lets the real HTTP path be exercised too.
+    app.all("/mock/powerplatform/*", async (req, reply) => {
+        const url = new URL(req.url, "http://local");
+        const origin = `${req.protocol}://${req.headers.host}/mock/powerplatform`;
+        const res = foreman.powerPlatform.mock.handle({ method: req.method, origin, path: url.pathname.slice("/mock/powerplatform".length), query: url.searchParams, headers: req.headers as Record<string, string | undefined>, body: req.body });
+        reply.code(res.status).headers(res.headers ?? {});
+        return res.body === undefined || res.status === 204 ? reply.send() : reply.send(res.body);
+    });
+
     // ── Mock Teams: accepts what a Teams Workflows webhook accepts ────────
     app.post<{ Params: { channel: string } }>("/mock/teams/:channel", async (req, reply) => {
         const body = req.body as { attachments?: unknown[] } | undefined;

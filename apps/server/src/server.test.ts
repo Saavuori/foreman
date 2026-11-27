@@ -672,12 +672,12 @@ describe("getting started", () => {
         const status = await tool("setup_status");
         expect(status.steps.find((s: any) => s.id === "mcp").done).toBe(true);
         const loaded = await tool("samples_load");
-        expect(loaded.agents).toBe(6);
+        expect(loaded.agents).toBe(9);
         const names = (await tool("agents_list")).map((a: any) => a.name);
         expect(names).toEqual(expect.arrayContaining(["Bug triage", "Model-backed reader"]));
-        expect((await tool("setup_status")).samples).toMatchObject({ agents: 6 });
+        expect((await tool("setup_status")).samples).toMatchObject({ agents: 9 });
         const removed = await tool("samples_remove");
-        expect(removed.agents).toBe(6);
+        expect(removed.agents).toBe(9);
         await waitFor(async () => !(await tool("agents_list")).some((a: any) => a.name === "Model-backed reader"));
         expect((await tool("setup_status")).samples).toBeNull();
         expect((await call("audit.list", {})).some((a: any) => a.capability === "samples.remove" && a.actor === "mcp:test-client")).toBe(true);
@@ -711,5 +711,58 @@ describe("connections", () => {
         await tool("connections_delete", { connectionId: connection.id, force: true });
         await tool("agents_archive", { agentId: agent.id });
         await tool("secrets_delete", { name: "self-mcp-token" });
+    });
+});
+
+describe("Power Platform over HTTP", () => {
+    const call = async (name: string, input: unknown = {}) => {
+        const res = await rpc(name, input);
+        if (res.status !== 200) throw new Error(`${name} → ${res.status}: ${res.body.error}`);
+        return res.body.result;
+    };
+
+    it("signs in with stored client secrets and administers the practice tenant over HTTP", async () => {
+        const { MOCK_PP_TENANT } = await import("@foreman/core");
+        await call("secrets.set", { name: "pp-reader", secretValue: "reader-client-secret-value" });
+        await call("secrets.set", { name: "pp-operator", secretValue: "operator-client-secret-value" });
+        expect((await rpc("powerplatform.configure", { operator: { secretName: "nope" } })).status).toBe(400);
+        // The test server's own address stands in for Microsoft's API and sign-in service.
+        await call("powerplatform.configure", { apiUrl: `${base}/mock/powerplatform`, loginUrl: `${base}/mock/powerplatform/login`, tenantId: MOCK_PP_TENANT, reader: { clientId: "mock-reader", secretName: "pp-reader" }, operator: { clientId: "unknown-app", secretName: "pp-operator" } });
+        const test = await call("powerplatform.test");
+        expect(test.reader).toMatchObject({ ok: true });
+        expect(test.operator.ok).toBe(false);
+        expect(test.operator.detail).toMatch(/Sign-in for the operator connection was refused \(401\): invalid_client/);
+        await call("powerplatform.configure", { operator: { clientId: "mock-operator" } });
+        expect((await call("powerplatform.test")).operator.ok).toBe(true);
+        expect((await call("secrets.list")).secrets.find((s: any) => s.name === "pp-reader").usedBy).toEqual(["Power Platform reader"]);
+
+        const { environments } = await call("powerplatform.environments", { refresh: true });
+        const hrDev = environments.find((e: any) => e.displayName === "HR Dev");
+        expect(hrDev.url).toBe(`${base}/mock/powerplatform/dataverse/${hrDev.id}/`);
+
+        const { agent } = await call("agents.create", {
+            name: "Access over HTTP",
+            spec: { tools: ["pp_env_users", "pp_access_grant"], powerPlatform: { connection: "operator" }, mock: { scenario: "pp-access-request" }, policy: { autonomy: "act", rules: [{ match: "pp_access_grant@role:Basic User", action: "allow" }, { match: "pp_access_grant", action: "ask" }] } },
+        });
+        const run = await call("runs.start", { agentId: agent.id, prompt: "User: carla.ruiz@contoso.test\nEnvironment: HR Dev\nRole: Delegate", waitSeconds: 10 });
+        expect(run.status).toBe("waiting_approval");
+        const [approval] = await call("approvals.list", { runId: run.id });
+        await call("approvals.decide", { approvalId: approval.id, decision: "approve" });
+        expect((await call("runs.wait", { runId: run.id, timeoutSeconds: 10 })).status).toBe("succeeded");
+        expect(foreman.powerPlatform.mock.find("HR Dev")!.users.find((u) => u.domainname === "carla.ruiz@contoso.test")!.roles).toContain("Delegate");
+
+        // Basic User is allowed by the rule, so this one does not wait for anybody.
+        const basic = await call("runs.start", { agentId: agent.id, prompt: "User: ben.okafor@contoso.test\nEnvironment: HR Dev\nRole: Basic User", waitSeconds: 10 });
+        expect(basic.status).toBe("succeeded");
+
+        // The client secrets were sent to the sign-in service, and appear nowhere Foreman records.
+        const recorded = JSON.stringify([await call("audit.list", {}), await call("runs.events", { runId: run.id, limit: 500 }), await call("powerplatform.settings")]);
+        expect(recorded).not.toContain("reader-client-secret-value");
+        expect(recorded).not.toContain("operator-client-secret-value");
+        const { tools } = await mcp.listTools();
+        expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(["powerplatform_settings", "powerplatform_configure", "powerplatform_environments"]));
+
+        await call("powerplatform.configure", { apiUrl: "", loginUrl: "", tenantId: "", reader: { clientId: "", secretName: "" }, operator: { clientId: "", secretName: "" } });
+        expect((await call("powerplatform.settings")).usingPracticeTenant).toBe(true);
     });
 });
