@@ -24,6 +24,7 @@ first.
 | `src/pages/RunDetail.tsx` | One run |
 | `src/pages/Notifications.tsx` | Inbox, Teams preview, channels & rules, delivery log |
 | `src/pages/Secrets.tsx` | Secrets |
+| `src/pages/PowerPlatform.tsx` | Power Platform: connection (reader and operator identities), environments and protection, which agents use it |
 | `src/pages/Connect.tsx` | MCP connection details and the capability console |
 
 ## Data: one way in, one way out

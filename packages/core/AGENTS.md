@@ -26,6 +26,9 @@ here; `apps/server` and `apps/web` are thin layers over this package. Read the r
 | `notify.ts` | Notification hub, channels, rules, Adaptive Cards, mock Teams | [notifications.md](docs/notifications.md) |
 | `teamsbot.ts` | Teams bot (Bot Framework protocol, token checks, card buttons) and the mock Bot Framework | [notifications.md](docs/notifications.md) |
 | `vault.ts` | Encrypted secrets, sealing, scrubbing | [secrets.md](docs/secrets.md) |
+| `powerplatform.ts` | `PowerPlatformClient` (sign-in, API, Dataverse, operations) and `PowerPlatformHub` (settings, identities, directory, protection, targets) | [power-platform.md](docs/power-platform.md) |
+| `pptools.ts` | The agents' `pp_*` tools, with `prepare` checks | [power-platform.md](docs/power-platform.md) |
+| `mockpowerplatform.ts` | The practice tenant: management API, Dataverse, sign-in, role-based access | [power-platform.md](docs/power-platform.md) |
 | `onboarding.ts` | Getting started: agent templates, sample data (load/remove), the checklist (`setupStatus`), example tasks | below |
 | `index.ts` | `createForeman(options)`: builds and wires everything; the package's exports | below |
 | `core.test.ts` | Unit-level tests through the registry | below |
@@ -35,7 +38,7 @@ here; `apps/server` and `apps/web` are thin layers over this package. Read the r
 `createForeman` in `index.ts` is the only place objects are constructed. Order matters:
 
 ```
-Store → Bus → runtimes → Vault → Engine → TriggerHub → MockJira → WorkHub → NotifyHub
+Store → Bus → runtimes → Vault → Engine → TriggerHub → MockJira → WorkHub → PowerPlatformHub → NotifyHub
       → MockBotFramework → TeamsBot (notify.setBot) → BatchHub → Registry → bot.setDecider
 ```
 

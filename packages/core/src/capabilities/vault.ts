@@ -11,6 +11,9 @@ function usage(ctx: Ctx): Map<string, string[]> {
     if (jira.type !== "none" && jira.secretName) add(jira.secretName, "Jira connection");
     const bot = ctx.bot.settings();
     if (bot.secretName) add(bot.secretName, "Teams bot");
+    const pp = ctx.powerPlatform.settings();
+    if (pp.reader.secretName) add(pp.reader.secretName, "Power Platform reader");
+    if (pp.operator.secretName) add(pp.operator.secretName, "Power Platform operator");
     for (const agent of ctx.store.listAgents()) {
         const spec = ctx.store.getRevision(agent.activeRevisionId)?.spec;
         if (spec) for (const name of Vault.references(JSON.stringify(spec.mcpServers))) add(name, `Agent: ${agent.name}`);
@@ -58,9 +61,10 @@ export const vaultCapabilities = [
     defineCapability({
         name: "system.agent_tools",
         title: "Foreman's agent tools",
-        description: "Tools Foreman itself gives to agents on any runtime: progress reports and questions (always on), and Jira tools (switched on per agent by adding the name to the agent's tools).",
+        description:
+            "Tools Foreman itself gives to agents on any runtime: progress reports and questions (always on), Jira tools, and Power Platform administration tools (pp_*), each switched on per agent by adding its name to the agent's tools. guarded tools change something and go through the guardrails; destructive ones (delete, reset, overwrite) are denied unless a rule allows or asks. Power Platform changes also need the agent's powerPlatform.connection set to operator.",
         readOnly: true,
         input: z.object({}),
-        handler: () => FOREMAN_TOOLS.map((t) => ({ ...toolInfo(t), alwaysOn: t.kind === "internal", guarded: t.kind === "custom-tool" })),
+        handler: () => FOREMAN_TOOLS.map((t) => ({ ...toolInfo(t), alwaysOn: t.kind === "internal", guarded: t.kind === "custom-tool" || t.kind === "destructive", destructive: t.kind === "destructive" })),
     }),
 ];

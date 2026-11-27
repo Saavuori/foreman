@@ -5,7 +5,8 @@ import type { AuthorizeRequest, RuntimeAdapter } from "./runtime.ts";
 import { TERMINAL_STATUSES, type Approval, type Run, type RunUsage } from "./schemas.ts";
 import type { Store } from "./store.ts";
 import type { JiraClient } from "./jira.ts";
-import { FOREMAN_TOOLS, foremanTool, toolEnabled, toolInfo } from "./tools.ts";
+import type { PowerPlatformHub } from "./powerplatform.ts";
+import { FOREMAN_TOOLS, foremanTool, toolEnabled, toolInfo, type Prepared, type ToolContext } from "./tools.ts";
 import { z } from "zod";
 
 export interface EngineOptions {
@@ -38,9 +39,9 @@ export class Engine {
         private opts: EngineOptions = { concurrency: 4 },
     ) {}
 
-    private toolHost?: { jira(): JiraClient };
+    private toolHost?: ToolHost;
     /** What Foreman's own agent tools act on. Set once the work queue exists. */
-    setToolHost(host: { jira(): JiraClient }) {
+    setToolHost(host: ToolHost) {
         this.toolHost = host;
     }
 
@@ -148,11 +149,11 @@ export class Engine {
         const authorize = async (request: AuthorizeRequest) => {
             const decision = evaluatePolicy(spec.policy, request);
             if (decision.action !== "ask") {
-                emit("foreman.policy_decision", { kind: request.kind, toolName: request.toolName, summary: request.summary, ...decision });
+                emit("foreman.policy_decision", { kind: request.kind, toolName: request.toolName, summary: request.summary, ...(request.targets?.length ? { targets: request.targets } : {}), ...decision });
                 return { allowed: decision.action === "allow", reason: decision.reason };
             }
             const approval = store.createApproval({ runId, agentId: run.agentId, kind: request.kind, toolName: request.toolName, summary: request.summary, request: request.request });
-            emit("foreman.approval_requested", { approvalId: approval.id, kind: request.kind, toolName: request.toolName, summary: request.summary, reason: decision.reason });
+            emit("foreman.approval_requested", { approvalId: approval.id, kind: request.kind, toolName: request.toolName, summary: request.summary, reason: decision.reason, ...(request.targets?.length ? { targets: request.targets } : {}) });
             setStatus({ status: "waiting_approval" });
             bus.emit("approval", approval);
             const verdict = await this.waitForApproval(approval.id, spec.policy.approvalTimeoutSeconds * 1000, state.abort.signal);
@@ -180,15 +181,33 @@ export class Engine {
                 if (!toolEnabled(tool, spec.tools)) return { ok: false, content: `${name} is not switched on for this agent` };
                 const parsed = tool.input.safeParse(args ?? {});
                 if (!parsed.success) return { ok: false, content: `Invalid arguments for ${name}: ${z.prettifyError(parsed.error)}` };
+                const host = this.toolHost;
+                if (!host) return { ok: false, content: "Foreman tools are not available on this server" };
+                const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+                const ctx: ToolContext = { run, spec, signal: state.abort.signal, emit, ask, jira: () => host.jira(), powerPlatform: () => host.powerPlatform() };
+                // A tool looks up what it acts on first, so the guardrails can judge the real target
+                // and so a protected one is refused before anybody is asked.
+                let prepared: Prepared = {};
+                if (tool.prepare) {
+                    try {
+                        prepared = await tool.prepare(ctx, parsed.data);
+                    } catch (e) {
+                        return { ok: false, content: message(e) };
+                    }
+                }
+                const summary = `${tool.title} — ${prepared.summary ?? tool.summary(parsed.data)}`.slice(0, 300);
+                if (prepared.refuse) {
+                    emit("foreman.policy_decision", { kind: tool.kind, toolName: tool.name, summary, ...(prepared.targets?.length ? { targets: prepared.targets } : {}), action: "deny", reason: prepared.refuse });
+                    return { ok: false, content: `Refused: ${prepared.refuse}` };
+                }
                 if (tool.kind !== "internal") {
-                    const verdict = await authorize({ kind: tool.kind, toolName: tool.name, summary: `${tool.title} — ${tool.summary(parsed.data)}`.slice(0, 200), request: { toolName: tool.name, arguments: parsed.data } });
+                    const verdict = await authorize({ kind: tool.kind, toolName: tool.name, targets: prepared.targets, summary, request: { toolName: tool.name, arguments: parsed.data, ...(prepared.targets?.length ? { targets: prepared.targets } : {}) } });
                     if (!verdict.allowed) return { ok: false, content: `Permission denied: ${verdict.reason}` };
                 }
-                if (!this.toolHost) return { ok: false, content: "Foreman tools are not available on this server" };
                 try {
-                    return { ok: true, content: await tool.handler({ run, emit, ask, jira: () => this.toolHost!.jira() }, parsed.data) };
+                    return { ok: true, content: await tool.handler({ ...ctx, prepared: prepared.data }, parsed.data) };
                 } catch (e) {
-                    return { ok: false, content: e instanceof Error ? e.message : String(e) };
+                    return { ok: false, content: message(e) };
                 }
             },
         };
@@ -243,6 +262,12 @@ export class Engine {
             this.pendingApprovals.set(approvalId, done);
         });
     }
+}
+
+/** What Foreman's own agent tools act on. */
+export interface ToolHost {
+    jira(): JiraClient;
+    powerPlatform(): PowerPlatformHub;
 }
 
 /** A deliberately small check: valid JSON, right top-level type, required keys present. */

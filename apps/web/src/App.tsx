@@ -8,6 +8,7 @@ import { RunDetail } from "./pages/RunDetail.tsx";
 import { Work } from "./pages/Work.tsx";
 import { Notifications } from "./pages/Notifications.tsx";
 import { Secrets } from "./pages/Secrets.tsx";
+import { PowerPlatform } from "./pages/PowerPlatform.tsx";
 import { Lamp, Modal, ToastProvider } from "./ui.tsx";
 
 const NAV = [
@@ -17,6 +18,7 @@ const NAV = [
     { path: "/runs", label: "Runs", match: "runs" },
     { path: "/approvals", label: "Approvals", match: "approvals" },
     { path: "/notifications", label: "Notifications", match: "notifications" },
+    { path: "/powerplatform", label: "Power Platform", match: "powerplatform" },
     { path: "/activity", label: "Activity", match: "activity" },
     { path: "/secrets", label: "Secrets", match: "secrets" },
     { path: "/connect", label: "Connect", match: "connect" },
@@ -41,6 +43,8 @@ function Page({ route }: { route: string[] }) {
             return <Activity />;
         case "secrets":
             return <Secrets />;
+        case "powerplatform":
+            return <PowerPlatform />;
         case "connect":
             return <Connect selected={id} />;
         default:

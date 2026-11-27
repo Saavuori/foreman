@@ -90,6 +90,12 @@ export const AgentSpec = z.object({
         .default({ maxAiCredits: MIN_AI_CREDITS, timeoutSeconds: 600 }),
     /** Optional JSON Schema the final answer must satisfy. */
     outputSchema: z.record(z.string(), z.unknown()).optional(),
+    /** Which Power Platform identity the agent's `pp_*` tools use. Only `operator` can change anything. */
+    powerPlatform: z
+        .object({
+            connection: z.enum(["reader", "operator"]).default("reader").describe("reader: read-only identity (Power Platform reader). operator: the identity that may change environments and access"),
+        })
+        .default({ connection: "reader" }),
 });
 export type AgentSpec = z.infer<typeof AgentSpec>;
 export type AgentSpecInput = z.input<typeof AgentSpec>;
@@ -341,3 +347,37 @@ export const DEFAULT_TICKET_PROMPT = `Work on Jira ticket {{payload.key}}: {{pay
 Type: {{payload.type}} · Priority: {{payload.priority}} · Labels: {{payload.labels}}
 
 {{payload.description}}`;
+
+// ── Power Platform ─────────────────────────────────────────────────────────
+
+/** One app registration Foreman signs in as. The client secret lives in the vault, by name. */
+export const PowerPlatformIdentity = z.object({
+    clientId: z.string().default(""),
+    /** Name of the vault secret holding the client secret. */
+    secretName: z.string().default(""),
+});
+export type PowerPlatformIdentity = z.infer<typeof PowerPlatformIdentity>;
+
+export const PowerPlatformSettings = z.object({
+    /** Entra tenant (directory) id. */
+    tenantId: z.string().default(""),
+    /** Power Platform API address. Empty means the built-in practice tenant. */
+    apiUrl: z.string().default(""),
+    /** Where tokens come from. Empty means Microsoft Entra ID (or the practice tenant's own sign-in). */
+    loginUrl: z.string().default(""),
+    /** Read-only identity: give it the "Power Platform reader" role. Every read tool uses it. */
+    reader: PowerPlatformIdentity.prefault({}),
+    /** Identity that may change things: "Power Platform contributor". Only agents set to the operator connection use it. */
+    operator: PowerPlatformIdentity.prefault({}),
+    /** Refuse every change to production environments. */
+    protectProduction: z.boolean().default(true),
+    /** Refuse every change to the default environment. */
+    protectDefault: z.boolean().default(true),
+    /** Environment ids that refuse every change, whatever their type. */
+    protectedEnvironments: z.array(z.string()).default([]),
+    /** How long a tool waits for a long operation (copy, reset …) before handing back its id. */
+    waitSeconds: z.number().int().min(0).max(1800).default(120),
+    /** How long the environment directory is reused before it is fetched again. */
+    directoryTtlSeconds: z.number().int().min(0).max(3600).default(300),
+});
+export type PowerPlatformSettings = z.infer<typeof PowerPlatformSettings>;

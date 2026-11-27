@@ -59,8 +59,57 @@ function foremanToolArgs(tool: string, run: Run): Record<string, unknown> | unde
         case "ask_for_info":
             return { question: "Is there anything else I should know before I start?" };
     }
+    if (tool.startsWith("pp_")) return ppToolArgs(tool, run);
     return undefined;
 }
+
+/** A "Field: value" line from the request, as platform tickets are written ("Environment: HR Dev"). */
+const field = (run: Run, name: string) => new RegExp(`^\\s*${name}\\s*:\\s*(.+?)\\s*$`, "im").exec(run.prompt)?.[1];
+
+/** Arguments for the Power Platform tools against the practice tenant, taken from the request where it says. */
+function ppToolArgs(tool: string, run: Run): Record<string, unknown> | undefined {
+    const environment = field(run, "Environment") ?? "HR Dev";
+    const user = field(run, "User") ?? "carla.ruiz@contoso.test";
+    const role = field(run, "Role") ?? "Environment Maker";
+    switch (tool) {
+        case "pp_env_list":
+        case "pp_env_groups":
+            return {};
+        case "pp_env_get":
+        case "pp_backups":
+        case "pp_settings_get":
+        case "pp_env_roles":
+        case "pp_env_managed":
+        case "pp_env_reset":
+        case "pp_env_delete":
+            return { environment };
+        case "pp_operations":
+            return { environment };
+        case "pp_env_users":
+            return { environment, user };
+        case "pp_api_get":
+            return { path: "/environmentmanagement/environmentGroups" };
+        case "pp_env_backup":
+            return { environment, label: `Simulated backup for ${ticketKey(run) ?? "a test run"}` };
+        case "pp_env_create":
+            return { name: field(run, "Name") ?? "Simulated sandbox", type: field(run, "Environment type") ?? "Sandbox", ...(field(run, "Group") ? { group: field(run, "Group") } : {}) };
+        case "pp_env_add_to_group":
+            return { environment, group: field(run, "Group") ?? "Sandboxes" };
+        case "pp_access_grant":
+        case "pp_access_revoke":
+            return { environment, user, role };
+        case "pp_env_copy":
+            return { source: field(run, "Source") ?? "Finance Production", target: field(run, "Target") ?? "Finance Test" };
+        case "pp_env_restore":
+            return { environment, pointInTime: new Date(Date.now() - 86_400_000).toISOString() };
+    }
+    return undefined;
+}
+const pp = (tool: string, run: Run, extra: Record<string, unknown> = {}): MockStep => ({ do: "tool", tool, args: { ...ppToolArgs(tool, run), ...extra } });
+const commentOn = (run: Run, text: string): MockStep[] => {
+    const key = ticketKey(run);
+    return key ? [{ do: "tool", tool: "jira_add_comment", args: { key, text } }] : [];
+};
 
 export const MOCK_SCENARIOS: MockScenario[] = [
     {
@@ -245,6 +294,79 @@ export const MOCK_SCENARIOS: MockScenario[] = [
                 { do: "say", content: `Planned: ${subject(run)}\n\nCreated two subtasks under ${key}, commented the plan and asked to move the ticket to In Review. Any step the guardrails refused is marked in the trace.` },
             ];
         },
+    },
+    {
+        name: "pp-governance-report",
+        title: "Power Platform: governance report",
+        description: "Reads the tenant: environments, groups, idle sandboxes, people who have left, backups of production. Changes nothing. Needs the Power Platform read tools.",
+        script: ({ run }) => [
+            { do: "think", intent: "Listing environments and groups" },
+            { do: "progress", step: 1, total: 3, message: "Reading the tenant" },
+            pp("pp_env_list", run),
+            pp("pp_env_groups", run),
+            usage(1800, 240, 2),
+            { do: "progress", step: 2, total: 3, message: "Checking sandboxes and people" },
+            pp("pp_env_get", run, { environment: "Sales Old" }),
+            pp("pp_env_users", run, { environment: "Sales Old", user: undefined }),
+            pp("pp_backups", run, { environment: "Finance Production" }),
+            usage(2400, 380, 2.5),
+            { do: "progress", step: 3, total: 3, message: "Writing the report" },
+            {
+                do: "say",
+                content:
+                    "Governance report\n\n- Sales Old: sandbox in no group, created long ago — candidate for removal; ask its owner first.\n- Erik Nyman's account is disabled but still holds Environment Maker in several environments — review and take the role away.\n- Finance Production has recent system backups.\n- Mika Developer is outside every group; consider the Sandboxes group.",
+            },
+        ],
+    },
+    {
+        name: "pp-environment-request",
+        title: "Power Platform: environment request",
+        description: "Creates the environment a ticket asks for (Name:, Environment type:, Group: lines), then comments on the ticket. Creating needs approval under the template's guardrails.",
+        script: ({ run }) => {
+            const name = field(run, "Name") ?? "Simulated sandbox";
+            return [
+                { do: "think", intent: `Checking that “${name}” does not exist yet` },
+                pp("pp_env_list", run, { search: name }),
+                usage(1400, 200, 1.5),
+                { do: "progress", step: 1, total: 2, message: "Creating the environment" },
+                pp("pp_env_create", run),
+                usage(1200, 160, 1),
+                { do: "progress", step: 2, total: 2, message: "Telling the requester" },
+                ...commentOn(run, `Created the environment “${name}”${field(run, "Group") ? ` in group ${field(run, "Group")}` : ""}. If any step was refused, the reason is in Foreman's trace.`),
+                { do: "say", content: `Environment request handled: “${name}”. Anything the guardrails refused is marked in the trace.` },
+            ];
+        },
+    },
+    {
+        name: "pp-access-request",
+        title: "Power Platform: access request",
+        description: "Gives the person named in the ticket (User:, Environment:, Role: lines) the role asked for, then comments on the ticket.",
+        script: ({ run }) => [
+            { do: "think", intent: "Checking the person's current roles" },
+            pp("pp_env_users", run),
+            usage(1100, 150, 1),
+            pp("pp_access_grant", run),
+            ...commentOn(run, `Access: ${field(run, "User") ?? "the requester"} → ${field(run, "Role") ?? "the role asked for"} in ${field(run, "Environment") ?? "the environment"}.`),
+            { do: "say", content: "Access request handled. Whether the role was given, or why not, is in the trace." },
+        ],
+    },
+    {
+        name: "pp-maintenance",
+        title: "Power Platform: back up, then reset",
+        description: "Backs up the environment named in the ticket, then resets it. Reset is destructive: denied unless a guardrail rule allows or asks.",
+        script: ({ run }) => [
+            { do: "think", intent: "Reading the environment and its backups first" },
+            pp("pp_env_get", run),
+            pp("pp_backups", run),
+            usage(1300, 180, 1.5),
+            { do: "progress", step: 1, total: 2, message: "Taking a backup" },
+            pp("pp_env_backup", run),
+            { do: "progress", step: 2, total: 2, message: "Resetting" },
+            pp("pp_env_reset", run),
+            usage(900, 140, 1),
+            ...commentOn(run, `Maintenance on ${field(run, "Environment") ?? "the environment"}: backup taken, then reset (unless the guardrails stopped it — see Foreman's trace).`),
+            { do: "say", content: "Backed up the environment and asked to reset it. A refused step is marked in the trace." },
+        ],
     },
     {
         name: "bad-output",

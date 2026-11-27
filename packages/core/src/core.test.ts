@@ -276,13 +276,13 @@ describe("getting started", () => {
     it("loads sample data that does not count as done, and removes it again", async () => {
         const { f, call } = boot();
         const loaded = await call("samples.load");
-        expect(loaded).toMatchObject({ agents: 6, intakeSwitchedOn: true });
+        expect(loaded).toMatchObject({ agents: 9, intakeSwitchedOn: true });
         await expect(call("samples.load")).rejects.toThrow(/already loaded/);
-        expect((await call<any[]>("agents.list")).length).toBe(6);
+        expect((await call<any[]>("agents.list")).length).toBe(9);
         expect((await call<any[]>("routing.list")).length).toBe(loaded.rules);
 
         let status = await call("setup.status");
-        expect(status).toMatchObject({ requiredDone: 0, next: "agent", samples: { agents: 6 } });
+        expect(status).toMatchObject({ requiredDone: 0, next: "agent", samples: { agents: 9 } });
         expect(step(status, "notify").done).toBe(false);
 
         const { agent } = await call("agents.create", { name: "Mine", spec: sim });
@@ -295,6 +295,124 @@ describe("getting started", () => {
         expect(status.samples).toBeNull();
         expect(step(status, "run").path).toBe(`/agents/${agent.id}`);
         await expect(call("samples.remove")).rejects.toThrow(/No sample data/);
+        await f.stop();
+    });
+});
+
+describe("power platform", () => {
+    const base = { rules: [], approvalTimeoutSeconds: 60 };
+    const sub = (targets: string[]) => ({ kind: "destructive", toolName: "pp_env_reset", targets });
+
+    it("matches rules against the environment, and never lets a preset destroy", () => {
+        expect(evaluatePolicy({ ...base, autonomy: "act" }, sub(["sandbox"])).action).toBe("deny");
+        expect(evaluatePolicy({ ...base, autonomy: "full" }, sub(["sandbox"])).action).toBe("allow");
+        const policy = { ...base, autonomy: "full" as const, rules: [{ match: "*@production", action: "deny" as const }, { match: "pp_env_reset@sandbox", action: "ask" as const }, { match: "destructive@group:HR", action: "allow" as const }] };
+        expect(evaluatePolicy(policy, sub(["production", "group:Finance"])).action).toBe("deny");
+        expect(evaluatePolicy(policy, sub(["sandbox", "group:HR"])).action).toBe("ask");
+        expect(evaluatePolicy(policy, sub(["developer", "group:HR"])).action).toBe("allow");
+        // A plain pattern still applies whatever the target, and "*" does not swallow the targeted forms.
+        expect(evaluatePolicy({ ...policy, rules: [{ match: "pp_env_reset", action: "ask" }] }, sub(["production"])).action).toBe("ask");
+        expect(evaluatePolicy({ ...base, autonomy: "act", rules: [{ match: "*@sandbox", action: "allow" }] }, { kind: "custom-tool", toolName: "x" }).action).toBe("allow");
+    });
+
+    const agent = async (call: ReturnType<typeof boot>["call"], spec: Record<string, unknown>) => (await call("agents.create", { name: `pp ${Math.random()}`, spec: { ...sim, ...spec } })).agent;
+
+    it("reads the practice tenant with the reader identity only", async () => {
+        const { f, call } = boot();
+        const template = (await call<any[]>("agents.templates")).find((t) => t.id === "pp-governance-report")!;
+        const a = await agent(call, template.spec);
+        f.powerPlatform.mock.calls.length = 0;
+        const run = await call<Run>("runs.start", { agentId: a.id, prompt: "Weekly report", waitSeconds: 10 });
+        expect(run.status).toBe("succeeded");
+        const { steps } = await call("runs.timeline", { runId: run.id });
+        expect(steps.filter((s: any) => s.kind === "tool" && s.status === "ok").length).toBeGreaterThanOrEqual(5);
+        const signedBy = new Set(f.powerPlatform.mock.calls.filter((c) => c.clientId).map((c) => c.clientId));
+        expect([...signedBy]).toEqual(["mock-reader"]);
+        const settings = await call("powerplatform.settings");
+        expect(settings).toMatchObject({ usingPracticeTenant: true, identities: { reader: { ok: true }, operator: { ok: true } } });
+        expect(settings.agents.find((x: any) => x.agentId === a.id)).toMatchObject({ connection: "reader", canChange: false });
+        await f.stop();
+    });
+
+    it("asks before giving a role, names it plainly, and never gives System Administrator", async () => {
+        const { f, call } = boot();
+        const template = (await call<any[]>("agents.templates")).find((t) => t.id === "pp-access-request")!;
+        const a = await agent(call, template.spec);
+        const carla = () => f.powerPlatform.mock.find("HR Dev")!.users.find((u) => u.domainname === "carla.ruiz@contoso.test")!;
+        expect(carla().roles).toEqual([]);
+
+        const example = await call("agents.example_task", { agentId: a.id });
+        const run = await call<Run>("runs.start", { agentId: a.id, prompt: example.prompt, waitSeconds: 10 });
+        expect(run.status).toBe("waiting_approval");
+        const [approval] = await call<any[]>("approvals.list", { runId: run.id });
+        expect(approval.summary).toBe("Power Platform: give a security role — Give Carla Ruiz (carla.ruiz@contoso.test) the role Environment Maker in HR Dev (sandbox, group HR)");
+        expect((approval.request as any).targets).toEqual(expect.arrayContaining(["sandbox", "group:HR", "role:Environment Maker"]));
+        expect(carla().roles).toEqual([]);
+        await call("approvals.decide", { approvalId: approval.id, decision: "approve" });
+        expect((await call<Run>("runs.wait", { runId: run.id, timeoutSeconds: 10 })).status).toBe("succeeded");
+        expect(carla().roles).toEqual(["Environment Maker"]);
+        expect(f.powerPlatform.mock.calls.some((c) => c.method === "POST" && c.path.includes("systemuserroles_association") && c.clientId === "mock-operator")).toBe(true);
+
+        const sysadmin = await call<Run>("runs.start", { agentId: a.id, prompt: "User: carla.ruiz@contoso.test\nEnvironment: HR Dev\nRole: System Administrator", waitSeconds: 10 });
+        expect(sysadmin.status).toBe("succeeded");
+        const explained = await call("runs.timeline", { runId: sysadmin.id });
+        expect(JSON.stringify(explained)).toMatch(/pp_access_grant@role:System Administrator/);
+        expect(carla().roles).not.toContain("System Administrator");
+        await f.stop();
+    });
+
+    it("refuses changes to protected environments and to agents on the read-only connection", async () => {
+        const { f, call } = boot();
+        const template = (await call<any[]>("agents.templates")).find((t) => t.id === "pp-maintenance")!;
+        const maint = await agent(call, { ...template.spec, policy: { autonomy: "act", rules: [{ match: "pp_env_reset@sandbox", action: "allow" }] } });
+        const prod = f.powerPlatform.mock.find("Finance Production")!;
+        const before = prod.users.length;
+        const run = await call<Run>("runs.start", { agentId: maint.id, prompt: "Environment: Finance Production", waitSeconds: 10 });
+        expect(run.status).toBe("succeeded");
+        const events = await call("runs.events", { runId: run.id, limit: 500 });
+        const reset = events.events.find((e: any) => e.type === "tool.execution_complete" && e.data.toolName === "pp_env_reset");
+        expect(reset.data.error.message).toMatch(/^Refused: Finance Production is a production environment/);
+        expect(await call<any[]>("approvals.list", { runId: run.id })).toEqual([]);
+        expect(prod.users.length).toBe(before);
+        // The backup ran: it changes nothing in the environment, so protection allows it.
+        expect(prod.backups[0]!.label).toMatch(/Simulated backup/);
+
+        // A person can protect any environment by name; the same sandbox reset is then refused.
+        await call("powerplatform.protect", { environment: "HR Dev" });
+        const hr = await call<Run>("runs.start", { agentId: maint.id, prompt: "Environment: HR Dev", waitSeconds: 10 });
+        expect(JSON.stringify(await call("runs.events", { runId: hr.id, limit: 500 }))).toMatch(/Refused: HR Dev is on the list of protected environments/);
+        await call("powerplatform.protect", { environment: "HR Dev", protected: false });
+        const hr2 = await call<Run>("runs.start", { agentId: maint.id, prompt: "Environment: HR Dev", waitSeconds: 10 });
+        expect(JSON.stringify(await call("runs.events", { runId: hr2.id, limit: 500 }))).toMatch(/Reset HR Dev: done/);
+
+        const reader = await agent(call, { tools: ["pp_env_create"], policy: { autonomy: "full" }, mock: { scenario: "pp-environment-request" } });
+        const refused = await call<Run>("runs.start", { agentId: reader.id, prompt: "Name: Should Not Exist", waitSeconds: 10 });
+        expect(JSON.stringify(await call("runs.events", { runId: refused.id, limit: 500 }))).toMatch(/read-only Power Platform connection/);
+        expect(f.powerPlatform.mock.find("Should Not Exist")).toBeUndefined();
+        await f.stop();
+    });
+
+    it("creates an environment, follows long operations and validates its settings", async () => {
+        const { f, call } = boot();
+        const creator = await agent(call, { tools: ["pp_env_list", "pp_env_create"], powerPlatform: { connection: "operator" }, policy: { autonomy: "act" }, mock: { scenario: "pp-environment-request" } });
+        const run = await call<Run>("runs.start", { agentId: creator.id, prompt: "Name: Atlas Dev\nEnvironment type: Sandbox\nGroup: Sandboxes", waitSeconds: 10 });
+        expect(run.status).toBe("succeeded");
+        const listed = await call("powerplatform.environments");
+        expect(listed.environments.find((e: any) => e.displayName === "Atlas Dev")).toMatchObject({ type: "Sandbox", groupName: "Sandboxes", protected: null });
+        // Asking for a group that does not exist fails before anyone is asked, with the groups that do.
+        const bad = await call<Run>("runs.start", { agentId: creator.id, prompt: "Name: Nowhere\nGroup: Marketing", waitSeconds: 10 });
+        expect(JSON.stringify(await call("runs.events", { runId: bad.id, limit: 500 }))).toMatch(/No environment group called \\"Marketing\\". Groups: Finance, HR, Sandboxes/);
+
+        // A slow operation hands back its id instead of holding the run.
+        f.powerPlatform.mock.opDelayMs = 60_000;
+        await call("powerplatform.configure", { waitSeconds: 0 });
+        const slow = await call<Run>("runs.start", { agentId: creator.id, prompt: "Name: Slow One", waitSeconds: 10 });
+        expect(JSON.stringify(await call("runs.events", { runId: slow.id, limit: 500 }))).toMatch(/still InProgress after 0s\. Check later with pp_operations/);
+
+        await expect(call("powerplatform.configure", { reader: { secretName: "missing" } })).rejects.toThrow(/Secret "missing" does not exist/);
+        await expect(call("powerplatform.configure", { apiUrl: "api.powerplatform.com" })).rejects.toThrow(/must start with http/);
+        await call("powerplatform.configure", { protectProduction: false });
+        expect((await call("powerplatform.environments")).environments.find((e: any) => e.displayName === "Finance Production").protected).toBeNull();
         await f.stop();
     });
 });

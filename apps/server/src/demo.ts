@@ -3,9 +3,9 @@ import { loadSamples, type createForeman } from "@foreman/core";
 type Foreman = ReturnType<typeof createForeman>;
 
 /**
- * Demo mode: the sample agents and routing rules, and the mock Jira filing tickets on its own — so
- * the work board is alive without Copilot, Jira or Teams. Stories are deliberately left unrouted
- * so the inbox has something in it.
+ * Demo mode: the sample agents and routing rules, the mock Jira filing tickets on its own and the
+ * practice Power Platform tenant — so the work board is alive without Copilot, Jira, Teams or a tenant.
+ * Stories are deliberately left unrouted so the inbox has something in it.
  */
 export function startDemo(foreman: Foreman): () => void {
     loadSamples(foreman, "system:demo");
@@ -16,6 +16,8 @@ export function startDemo(foreman: Foreman): () => void {
     foreman.notify.configure({ agingMinutes: 2 });
     foreman.work.updateSettings({ enabled: true, pollSeconds: 30, wipPerAgent: 2, writeBack: { enabled: true, statusStarted: "In Progress", statusReview: "In Review", statusDone: "Done" } });
     foreman.mockJira.setGenerator(5);
+    // Lifecycle operations in the practice tenant take a few seconds, so their progress can be watched.
+    foreman.powerPlatform.mock.opDelayMs = 4000;
     // New mock tickets announce themselves by webhook, so they appear at once rather than on the next poll.
     foreman.mockJira.webhookUrl = foreman.work.webhookUrl();
     void foreman.work.poll().catch(() => {});
