@@ -1,5 +1,6 @@
 import { go, rpc, useRpc } from "../api.ts";
 import { AnswerBox } from "../Answer.tsx";
+import { GetStarted, ShowGetStarted } from "./GetStarted.tsx";
 import { Empty, ErrorBanner, Lamp, num, pct, relTime, runDuration, SOURCE_LABEL, useAction, useTick } from "../ui.tsx";
 
 export function ApprovalTicket({ approval }: { approval: any }) {
@@ -95,8 +96,8 @@ export function Home() {
     const system = useRpc<any>("system.info", {}, []);
     const t = insights.data?.total;
     const agents = useRpc<any[]>("agents.list", {}, ["agents"]);
-    // Only worth a warning when some agent actually depends on Copilot.
-    const copilot = agents.data?.some((a) => a.runtime === "copilot") ? system.data?.runtimes.find((r: any) => r.name === "copilot") : undefined;
+    // Only worth a warning when some agent actually depends on Copilot; one with its own model key does not.
+    const copilot = agents.data?.some((a) => a.runtime === "copilot" && !a.provider) ? system.data?.runtimes.find((r: any) => r.name === "copilot") : undefined;
 
     return (
         <div className="page">
@@ -105,6 +106,7 @@ export function Home() {
                     <h1>The board</h1>
                     <p>What needs you, what is on shift, and how the last day went.</p>
                 </div>
+                <ShowGetStarted />
                 <a className="btn primary" href="#/agents/new">
                     New agent
                 </a>
@@ -120,6 +122,7 @@ export function Home() {
                     </a>
                 </div>
             ) : null}
+            <GetStarted />
 
             <div className="stats">
                 <div className="stat">

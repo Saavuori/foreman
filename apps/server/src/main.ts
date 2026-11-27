@@ -1,6 +1,8 @@
+import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { CopilotRuntime } from "@foreman/runtime-copilot";
-import { buildApp, seedIfEmpty } from "./app.ts";
+import { buildApp } from "./app.ts";
 import { startDemo } from "./demo.ts";
 
 // Demo mode keeps everything in memory and feeds itself work; nothing is written to the data folder.
@@ -19,6 +21,14 @@ if (!loopback && !token) {
     process.exit(1);
 }
 
+// A fresh checkout has no built web app, which would leave the browser with nothing to show.
+const root = resolve(import.meta.dirname, "../../..");
+// `npm run dev` serves the UI from Vite instead, so it needs no build.
+if (process.env.npm_lifecycle_event !== "dev" && !existsSync(resolve(root, "apps/web/dist/index.html"))) {
+    console.log("Building the web app (first start only)…");
+    execSync("npm run build", { cwd: root, stdio: "inherit" });
+}
+
 const { app, foreman } = await buildApp({
     dataDir,
     baseUrl,
@@ -29,7 +39,6 @@ const { app, foreman } = await buildApp({
     secretKey: process.env.FOREMAN_SECRET_KEY || undefined,
     memory: demo,
 });
-if (!demo) seedIfEmpty(foreman);
 foreman.start();
 const stopDemo = demo ? startDemo(foreman) : undefined;
 await app.listen({ host, port });

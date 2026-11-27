@@ -7,6 +7,7 @@ import { workCapabilities } from "./capabilities/work.ts";
 import { notifyCapabilities } from "./capabilities/notify.ts";
 import { vaultCapabilities } from "./capabilities/vault.ts";
 import { flowCapabilities } from "./capabilities/flow.ts";
+import { setupCapabilities } from "./capabilities/setup.ts";
 import { BatchHub } from "./batches.ts";
 import { Vault } from "./vault.ts";
 import { NotifyHub } from "./notify.ts";
@@ -34,6 +35,7 @@ export { Vault } from "./vault.ts";
 export { BatchHub, type Batch, type BatchProgress } from "./batches.ts";
 export { flowMetrics, runTimeline } from "./flow.ts";
 export * from "./tools.ts";
+export { AGENT_TEMPLATES, loadSamples, removeSamples, setupStatus, type AgentTemplate, type SetupStep } from "./onboarding.ts";
 export { WorkHub, defaultRank, ruleMatches } from "./work.ts";
 export * from "./notify.ts";
 export { TeamsBot, MockBotFramework, TeamsBotSettings, decidedCard, type Activity, type BotConversation } from "./teamsbot.ts";
@@ -73,7 +75,7 @@ export function createForeman(options: ForemanOptions): Services & { start(): vo
     notify.setBot(bot);
     const batches = new BatchHub(store, bus, work, notify, { baseUrl: options.baseUrl });
     const registry = new Registry();
-    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...teamsCapabilities, ...vaultCapabilities, ...flowCapabilities, ...opsCapabilities);
+    registry.register(...agentCapabilities, ...runCapabilities, ...workCapabilities, ...notifyCapabilities, ...teamsCapabilities, ...vaultCapabilities, ...flowCapabilities, ...setupCapabilities, ...opsCapabilities);
     const services: Services = { store, bus, engine, triggers, work, mockJira, notify, vault, batches, bot, mockBot, runtimes, registry, info: { version: "0.1.0", dataDir: options.memory ? "memory (nothing is saved)" : options.dataDir, baseUrl: options.baseUrl, startedAt: new Date().toISOString() } };
     registry.bind(services);
     // A press in Teams is decided by the same capability as a click in Foreman, audited as the Teams user.

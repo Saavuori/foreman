@@ -46,7 +46,7 @@ Run from the repository root.
 | `npm run build` | Type-checks and builds the web app into `apps/web/dist` |
 | `npm test` | Vitest, both test files (about 5 seconds; one test starts the real Copilot CLI) |
 | `npm run demo` | Server on port 4517, in memory, with sample agents and a self-feeding mock Jira |
-| `npm start` | Server on port 4517 with data in `./data` |
+| `npm start` | Server on port 4517 with data in `./data`; builds the web app first if it was never built (not when it is stale) |
 | `npm run dev` | Server (watch) + Vite dev server on 5173, proxying to 4517 |
 
 A change is done when `npm run typecheck`, `npm run build` and `npm test` all pass. For UI

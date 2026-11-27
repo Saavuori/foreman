@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import fastifyStatic from "@fastify/static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
-import { AgentSpec, CapabilityError, createForeman, mockModelReply, plainText, type Actor, type ForemanOptions } from "@foreman/core";
+import { CapabilityError, createForeman, mockModelReply, plainText, type Actor, type ForemanOptions } from "@foreman/core";
 import { createMcpServer } from "./mcp.ts";
 
 export interface AppOptions extends ForemanOptions {
@@ -204,21 +204,4 @@ ${f.comment.comments.map((c) => `<div style="border-left:3px solid #d5dbe1;paddi
     }
 
     return { app, foreman };
-}
-
-/** Give a fresh install something to look at and run. */
-export function seedIfEmpty(foreman: ReturnType<typeof createForeman>) {
-    if (foreman.store.listAgents(true).length) return;
-    foreman.store.createAgent({
-        name: "Hello Foreman",
-        description: "A sample agent on the built-in simulator. Run it to see a trace, then make your own.",
-        spec: AgentSpec.parse({
-            runtime: "simulated",
-            instructions: "You are a careful assistant. Read before you write, and keep answers short.",
-            tools: ["view", "edit"],
-            policy: { autonomy: "propose" },
-        }),
-        note: "Sample agent",
-        actor: "system:seed",
-    });
 }

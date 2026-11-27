@@ -40,6 +40,28 @@ const subject = (run: Run) => run.prompt.split("\n")[0]!.slice(0, 70);
 /** The ticket a run is about: from the work queue's payload, else the first key in the prompt. */
 const ticketKey = (run: Run): string | undefined => (run.payload as { key?: string } | undefined)?.key ?? /\b[A-Z][A-Z0-9]+-\d+\b/.exec(run.prompt)?.[0];
 
+/** Foreman's own tools validate their arguments, so the "auto" scenario has to call them with real ones. */
+function foremanToolArgs(tool: string, run: Run): Record<string, unknown> | undefined {
+    const key = ticketKey(run) ?? "DEMO-1";
+    switch (tool) {
+        case "jira_get_issue":
+            return { key };
+        case "jira_search":
+            return { jql: "status != Done", limit: 5 };
+        case "jira_add_comment":
+            return { key, text: `Simulated comment on ${key}: ${subject(run)}` };
+        case "jira_create_subtask":
+            return { parentKey: key, summary: "Simulated subtask", description: "Created by the simulator." };
+        case "jira_transition":
+            return { key, status: "In Review" };
+        case "report_progress":
+            return { step: 1, total: 1, message: "Working on it" };
+        case "ask_for_info":
+            return { question: "Is there anything else I should know before I start?" };
+    }
+    return undefined;
+}
+
 export const MOCK_SCENARIOS: MockScenario[] = [
     {
         name: "auto",
@@ -50,7 +72,7 @@ export const MOCK_SCENARIOS: MockScenario[] = [
             const toolError = /\[tool-error\]/.test(run.prompt);
             return [
                 { do: "think", intent: "Working out which tools the task needs" },
-                ...tools.map((t): MockStep => ({ do: "tool", ...t, args: { input: run.prompt.slice(0, 80) }, result: `Simulated result from ${t.tool}`, fail: toolError ? "Simulated tool failure (prompt contained [tool-error])" : undefined })),
+                ...tools.map((t): MockStep => ({ do: "tool", ...t, args: foremanToolArgs(t.tool, run) ?? { input: run.prompt.slice(0, 80) }, result: `Simulated result from ${t.tool}`, fail: toolError ? "Simulated tool failure (prompt contained [tool-error])" : undefined })),
                 usage(400 + run.prompt.length + spec.instructions.length, 120 + tools.length * 40, 1 + tools.length * 0.5),
                 ...(/\[fail\]/.test(run.prompt) ? [{ do: "fail", error: "Simulated failure (prompt contained [fail])" } as MockStep] : []),
                 { do: "say", content: `Simulated run complete. ${tools.length ? `Used ${tools.map((t) => t.tool).join(", ")}.` : "No tools were needed."}` },

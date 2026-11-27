@@ -616,19 +616,21 @@ function Setup({ agents, jira }: { agents: any[]; jira: any }) {
     );
 }
 
-export function Work({ itemId, batchId }: { itemId?: string; batchId?: string }) {
+export function Work({ itemId, batchId, view: initialView }: { itemId?: string; batchId?: string; view?: View }) {
     useTick(3000);
-    const [view, setViewState] = useState<View>(batchId !== undefined ? "batches" : "board");
+    const [view, setViewState] = useState<View>(batchId !== undefined ? "batches" : (initialView ?? "board"));
     const [batchFilter, setBatchFilter] = useState("");
     const batches = useRpc<any[]>("batches.list", {}, ["work"]);
     useEffect(() => {
         if (batchId !== undefined) setViewState("batches");
-    }, [batchId]);
+        else if (initialView) setViewState(initialView);
+    }, [batchId, initialView]);
     // The batch list has its own address so a notification can link straight to one.
     const setView = (next: View) => {
         setViewState(next);
         if (next === "batches") go("/work/batch");
-        else if (batchId !== undefined) go("/work");
+        else if (next === "setup") go("/work/setup");
+        else if (batchId !== undefined || initialView) go("/work");
     };
     const [agentFilter, setAgentFilter] = useState("");
     const [projectFilter, setProjectFilter] = useState("");

@@ -54,6 +54,8 @@ export const agentCapabilities = [
                     activeRevisionNumber: revision.number,
                     runtime: revision.spec.runtime,
                     model: revision.spec.model,
+                    /** Set when the agent runs on its own model provider, so it needs no Copilot access. */
+                    provider: revision.spec.provider?.type ?? null,
                     autonomy: revision.spec.policy.autonomy,
                     triggerCount: ctx.store.listTriggers(agent.id).length,
                     runs7d: mine.length,

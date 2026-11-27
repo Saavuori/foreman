@@ -630,3 +630,56 @@ describe("Teams bot", () => {
         await call("teamsbot.configure", { enabled: false });
     });
 });
+
+describe("getting started", () => {
+    const call = async (name: string, input: unknown = {}) => {
+        const res = await rpc(name, input);
+        if (res.status !== 200) throw new Error(`${name} → ${res.status}: ${res.body.error}`);
+        return res.body.result;
+    };
+    const waitFor = async <T>(fn: () => Promise<T | undefined | false>, ms = 8000): Promise<T> => {
+        const until = Date.now() + ms;
+        for (;;) {
+            const value = await fn();
+            if (value) return value;
+            if (Date.now() > until) throw new Error("timed out waiting");
+            await new Promise((r) => setTimeout(r, 25));
+        }
+    };
+
+    it("runs a template agent against the practice Jira, asking before it comments", async () => {
+        const previous = await call("jira.settings");
+        // The test server's own address stands in for the practice Jira, which is served over HTTP.
+        await call("jira.configure", { baseUrl: `${base}/mock/jira` });
+        const template = (await call("agents.templates")).find((t: any) => t.id === "ticket-summary");
+        const { agent } = await call("agents.create", { name: "Summary from template", spec: template.spec });
+        const issue = foreman.mockJira.list().find((i) => i.fields.status.name !== "Done" && !i.fields.parent)!;
+        const before = issue.fields.comment.comments.length;
+
+        const run = await call("runs.start", { agentId: agent.id, prompt: `Work on Jira ticket ${issue.key}: ${issue.fields.summary}`, waitSeconds: 10 });
+        expect(run.status).toBe("waiting_approval");
+        const [approval] = await call("approvals.list", { runId: run.id });
+        expect(approval.summary).toContain(`Jira: comment — ${issue.key}`);
+        expect(foreman.mockJira.get(issue.key)!.fields.comment.comments.length).toBe(before);
+        await call("approvals.decide", { approvalId: approval.id, decision: "approve" });
+        expect((await call("runs.wait", { runId: run.id, timeoutSeconds: 10 })).status).toBe("succeeded");
+        expect(foreman.mockJira.get(issue.key)!.fields.comment.comments.length).toBe(before + 1);
+
+        await call("jira.configure", { baseUrl: previous.baseUrl.includes("/mock/jira") ? "" : previous.baseUrl });
+    });
+
+    it("loads and removes sample data over MCP, and counts the MCP client as connected", async () => {
+        const status = await tool("setup_status");
+        expect(status.steps.find((s: any) => s.id === "mcp").done).toBe(true);
+        const loaded = await tool("samples_load");
+        expect(loaded.agents).toBe(6);
+        const names = (await tool("agents_list")).map((a: any) => a.name);
+        expect(names).toEqual(expect.arrayContaining(["Bug triage", "Model-backed reader"]));
+        expect((await tool("setup_status")).samples).toMatchObject({ agents: 6 });
+        const removed = await tool("samples_remove");
+        expect(removed.agents).toBe(6);
+        await waitFor(async () => !(await tool("agents_list")).some((a: any) => a.name === "Model-backed reader"));
+        expect((await tool("setup_status")).samples).toBeNull();
+        expect((await call("audit.list", {})).some((a: any) => a.capability === "samples.remove" && a.actor === "mcp:test-client")).toBe(true);
+    });
+});

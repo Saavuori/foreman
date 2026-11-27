@@ -25,7 +25,7 @@ export interface BusEvents {
     event: [event: RunEvent];
     approval: [approval: Approval];
     /** Coarse "something in this collection changed" signal for live UIs. */
-    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify"];
+    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify" | "setup"];
     /** A work item changed state. */
     work: [item: WorkItem, previous: WorkState];
     /** Something a person should hear about that has no run or ticket behind it. */
@@ -103,6 +103,7 @@ export interface CapabilityDescriptor {
 export class Registry {
     private caps = new Map<string, Capability<any, any>>();
     private services!: Services;
+    private mcpSeen = false;
 
     bind(services: Services) {
         this.services = services;
@@ -140,6 +141,14 @@ export class Registry {
             throw new CapabilityError(`Invalid input for ${cap.name}: ${z.prettifyError(parsed.error)}`, "invalid_input");
         }
         const { store, bus } = this.services;
+        // The getting-started checklist ticks "connect an MCP client" off the first call one makes.
+        if (actor.kind === "mcp" && !this.mcpSeen) {
+            this.mcpSeen = true;
+            if (!store.getSetting("setup.mcpSeen")) {
+                store.setSetting("setup.mcpSeen", new Date().toISOString());
+                bus.emit("change", "setup");
+            }
+        }
         try {
             const result = await cap.handler({ ...this.services, actor }, parsed.data, rawInput ?? {});
             if (!cap.readOnly) {

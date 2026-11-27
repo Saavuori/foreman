@@ -16,9 +16,10 @@ first.
 | `src/Answer.tsx` | `AnswerBox` for replying to an agent's question |
 | `src/styles.css` | All styles, in labelled sections |
 | `src/pages/Home.tsx` | Board (overview); also exports `ApprovalTicket`, `RunRows` |
+| `src/pages/GetStarted.tsx` | The getting-started checklist on the Board (`setup.status`), sample data buttons |
 | `src/pages/Work.tsx` | Work board, queue, ticket drawer, routing & intake, Jira connection |
 | `src/pages/WorkViews.tsx` | Timeline, Flow (charts), Batches |
-| `src/pages/AgentStudio.tsx` | New agent, the studio (spec editor, test bench, triggers, revisions) |
+| `src/pages/AgentStudio.tsx` | New agent (from a template or blank), the studio (spec editor, test bench with an example task, triggers, revisions) |
 | `src/pages/Lists.tsx` | Agents, Runs, Approvals, Activity lists |
 | `src/pages/RunDetail.tsx` | One run |
 | `src/pages/Notifications.tsx` | Inbox, Teams preview, channels & rules, delivery log |

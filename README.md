@@ -10,18 +10,33 @@ Plans: [PLAN.md](PLAN.md) (overall), [PLAN-2-work-queue.md](PLAN-2-work-queue.md
 *The Board — what needs a person, what is running, and how the last day went. All screenshots in
 this file are from `npm run demo`, so the tickets, agents and numbers are the demo's own.*
 
-## Run it
+## Get started
 
-Needs Node 22.13 or newer.
+Needs Node 22.13 or newer. No Copilot subscription, Jira or Teams account is needed to start.
 
 ```bash
 npm install
-npm run build      # builds the web UI
-npm run demo       # sample agents + a live feed of mock work, kept in memory
-npm start          # normal mode, data saved in ./data
+npm start          # builds the web app on first start; data saved in ./data
 ```
 
-Open http://localhost:4517. The MCP endpoint is http://localhost:4517/mcp.
+Open http://localhost:4517 and follow the **Get started** checklist on the Board:
+
+1. **Create your first agent** from a template (ticket summary, bug triage, ticket planner,
+   answer from docs). It runs on the simulator, so there's no model and no cost, and it asks before it changes anything.
+2. **Try it on the test bench.** "Use an example task" fills in a task with a real ticket from
+   the built-in practice Jira. Watch the trace and approve the step it stops at.
+3. **Choose where tickets come from:** the practice Jira works straight away; your own Jira
+   needs its address and a token.
+4. **Send tickets to an agent** with a routing rule.
+
+Later, when you are ready: notifications (Teams, or the built-in Teams preview), a real model,
+and an MCP client. Each step is ticked from what is actually set up. **Load sample data** on the
+same card fills the app with sample agents and tickets to look around in; one click removes
+them again.
+
+Or look around first with `npm run demo`, which keeps everything in memory and feeds itself work.
+
+The MCP endpoint is http://localhost:4517/mcp.
 
 The **Connect** page shows the endpoint, ready-made client settings, and a console where every
 capability can be called by hand:

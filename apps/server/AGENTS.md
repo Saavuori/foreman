@@ -9,11 +9,11 @@ first.
 
 | File | Role |
 |---|---|
-| `src/main.ts` | Process entry: reads environment, builds the app, seeds or starts the demo, listens |
-| `src/app.ts` | `buildApp(options)` — all routes. `seedIfEmpty` — the sample agent on a fresh install |
+| `src/main.ts` | Process entry: reads environment, builds the web app if it was never built (not under `npm run dev`), builds the server, starts the demo, listens |
+| `src/app.ts` | `buildApp(options)` — all routes. A fresh install starts empty; the Board's getting-started checklist takes it from there |
 | `src/mcp.ts` | `createMcpServer(backend)` — tools, resources and prompts from the registry |
 | `src/mcp-stdio.ts` | A stdio MCP server that forwards to a running Foreman over HTTP |
-| `src/demo.ts` | `startDemo` — sample agents, routing rules, a Teams preview channel, a batch, the ticket generator |
+| `src/demo.ts` | `startDemo` — the sample data from core's `loadSamples`, plus the Teams bot, a batch and the ticket generator |
 | `src/server.test.ts` | Integration tests over real HTTP and a real MCP client |
 
 ## Routes

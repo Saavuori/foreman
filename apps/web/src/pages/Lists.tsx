@@ -60,7 +60,7 @@ export function Agents() {
                     </div>
                 ) : agents.loading ? null : (
                     <Empty title="No agents yet">
-                        Create one here, or ask an MCP client to call <span className="mono">agents_create</span>.
+                        Start from a ready-made agent in a few clicks, or ask an MCP client to call <span className="mono">agents_create</span>.
                         <br />
                         <a className="btn primary" href="#/agents/new">
                             New agent

@@ -1907,3 +1907,115 @@ table.grid th.num {
         border-bottom: 1px solid var(--line);
     }
 }
+
+/* ── Getting started ───────────────────────────────────────────────────── */
+.get-started {
+    margin-bottom: 20px;
+}
+.get-started .card-head {
+    flex-wrap: wrap;
+}
+.setup-meter {
+    display: flex;
+    gap: 3px;
+}
+.setup-meter i {
+    width: 22px;
+    height: 6px;
+    border-radius: 2px;
+    background: var(--sunken);
+    border: 1px solid var(--line);
+}
+.setup-meter i.on {
+    background: var(--go);
+    border-color: var(--go);
+}
+.setup-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.setup-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+}
+.setup-step + .setup-step {
+    border-top: 1px solid var(--line);
+}
+.setup-step b {
+    display: block;
+    font-weight: 600;
+}
+.setup-step p {
+    margin: 3px 0 0;
+    color: var(--ink-3);
+    font-size: 13px;
+    line-height: 1.45;
+    max-width: 72ch;
+}
+.setup-step .btn {
+    flex-shrink: 0;
+    align-self: center;
+}
+.setup-mark {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font: 600 12px/1 var(--mono);
+    border: 1px solid var(--line-strong);
+    color: var(--ink-3);
+    background: var(--surface);
+}
+.setup-step.next {
+    background: var(--hivis-wash);
+    box-shadow: inset 3px 0 0 var(--hivis);
+}
+.setup-step.next .setup-mark {
+    border-color: var(--hivis);
+    color: var(--hivis-ink);
+}
+.setup-step.done .setup-mark {
+    background: var(--go);
+    border-color: var(--go);
+    color: var(--surface);
+}
+.setup-step.done b {
+    color: var(--ink-2);
+}
+.setup-more {
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+}
+.setup-more > .eyebrow {
+    padding: 0 16px;
+}
+.setup-steps.compact .setup-step {
+    padding: 8px 16px;
+}
+.setup-steps.compact .setup-step + .setup-step {
+    border-top: 0;
+}
+.setup-foot {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 11px 16px;
+    border-top: 1px solid var(--line);
+    background: var(--sunken);
+    font-size: 13px;
+    color: var(--ink-2);
+}
+@media (max-width: 640px) {
+    .setup-step {
+        flex-wrap: wrap;
+    }
+    .setup-step .btn {
+        margin-left: 36px;
+    }
+}

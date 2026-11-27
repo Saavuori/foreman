@@ -230,3 +230,71 @@ describe("vault", () => {
         expect(() => other.f.vault.unseal(sealed)).toThrow(/cannot be decrypted/);
     });
 });
+
+describe("getting started", () => {
+    const step = (status: any, id: string) => status.steps.find((s: any) => s.id === id);
+
+    it("ticks each step off from what is really set up", async () => {
+        const { f, call } = boot();
+        let status = await call("setup.status");
+        expect(status).toMatchObject({ requiredDone: 0, requiredTotal: 4, next: "agent", hidden: false, samples: null });
+
+        const templates = await call<any[]>("agents.templates");
+        expect(templates.length).toBeGreaterThanOrEqual(4);
+        for (const t of templates) expect(t.spec).toMatchObject({ runtime: "simulated", policy: { autonomy: "propose" } });
+        const summary = templates.find((t) => t.id === "ticket-summary")!;
+        const { agent } = await call("agents.create", { name: summary.name, description: summary.description, spec: summary.spec });
+        status = await call("setup.status");
+        expect(step(status, "agent").done).toBe(true);
+        expect(status.next).toBe("run");
+        expect(step(status, "run").path).toBe(`/agents/${agent.id}`);
+
+        // The example task names a real practice ticket, and a template's first run stops to ask before it writes.
+        const example = await call("agents.example_task", { agentId: agent.id });
+        expect(example.ticketKey).toMatch(/^[A-Z]+-\d+$/);
+        expect(example.prompt).toContain(example.ticketKey);
+        const run = await call<Run>("runs.start", { agentId: agent.id, prompt: example.prompt, waitSeconds: 10 });
+        expect(run.status).toBe("waiting_approval");
+        status = await call("setup.status");
+        expect(status.next).toBe("intake");
+
+        await call("jira.configure", { enabled: true });
+        await call("routing.create", { name: "All tickets", agentId: agent.id });
+        status = await call("setup.status");
+        expect(status).toMatchObject({ requiredDone: 4, next: null });
+        expect(step(status, "model").done).toBe(false);
+
+        // The first call from an MCP client ticks the MCP step.
+        await f.registry.invoke("system.info", {}, { kind: "mcp", id: "test-client" });
+        expect(step(await call("setup.status"), "mcp").done).toBe(true);
+
+        await call("setup.hide", { hidden: true });
+        expect((await call("setup.status")).hidden).toBe(true);
+        await f.stop();
+    });
+
+    it("loads sample data that does not count as done, and removes it again", async () => {
+        const { f, call } = boot();
+        const loaded = await call("samples.load");
+        expect(loaded).toMatchObject({ agents: 6, intakeSwitchedOn: true });
+        await expect(call("samples.load")).rejects.toThrow(/already loaded/);
+        expect((await call<any[]>("agents.list")).length).toBe(6);
+        expect((await call<any[]>("routing.list")).length).toBe(loaded.rules);
+
+        let status = await call("setup.status");
+        expect(status).toMatchObject({ requiredDone: 0, next: "agent", samples: { agents: 6 } });
+        expect(step(status, "notify").done).toBe(false);
+
+        const { agent } = await call("agents.create", { name: "Mine", spec: sim });
+        await call("samples.remove");
+        expect((await call<any[]>("agents.list")).map((a) => a.name)).toEqual(["Mine"]);
+        expect(await call<any[]>("routing.list")).toEqual([]);
+        expect(await call<any[]>("channels.list")).toEqual([]);
+        expect((await call("jira.settings")).enabled).toBe(false);
+        status = await call("setup.status");
+        expect(status.samples).toBeNull();
+        expect(step(status, "run").path).toBe(`/agents/${agent.id}`);
+        await expect(call("samples.remove")).rejects.toThrow(/No sample data/);
+        await f.stop();
+    });
+});

@@ -26,6 +26,7 @@ here; `apps/server` and `apps/web` are thin layers over this package. Read the r
 | `notify.ts` | Notification hub, channels, rules, Adaptive Cards, mock Teams | [notifications.md](docs/notifications.md) |
 | `teamsbot.ts` | Teams bot (Bot Framework protocol, token checks, card buttons) and the mock Bot Framework | [notifications.md](docs/notifications.md) |
 | `vault.ts` | Encrypted secrets, sealing, scrubbing | [secrets.md](docs/secrets.md) |
+| `onboarding.ts` | Getting started: agent templates, sample data (load/remove), the checklist (`setupStatus`), example tasks | below |
 | `index.ts` | `createForeman(options)`: builds and wires everything; the package's exports | below |
 | `core.test.ts` | Unit-level tests through the registry | below |
 
@@ -92,6 +93,24 @@ HTTP (mock Jira, Teams webhooks, MCP) belongs in `apps/server/src/server.test.ts
 
 `simulatedStepDelayMs: 0` makes mock runs finish instantly; do not write tests that sleep for a
 fixed time — poll for the state you expect.
+
+## Getting started (`onboarding.ts`)
+
+The checklist on the Board comes from `setup.status`, which works each step out from real state
+— never from what a person clicked. Things to keep true when changing it:
+
+- **Sample data never counts.** `samples.load` records what it created under the `samples`
+  setting; `setupStatus` ignores those agents, rules and channels, and ticket pickup the samples
+  switched on. `samples.remove` archives the agents (runs stay in history) and deletes the rest.
+  The demo loads the samples too (`apps/server/src/demo.ts`) and hides the checklist.
+- **Templates keep their promise.** Every template runs on the simulator with autonomy
+  `propose`. Foreman's Jira tools are custom tools, which `propose` allows, so templates that
+  write to Jira carry explicit `ask` rules. A test checks that a template's first run stops for
+  approval.
+- The MCP step is ticked by the registry on the first call from an `mcp` actor
+  (`setup.mcpSeen`).
+- A new step needs a `path` the UI can go to; `/work/setup` and `/notifications/setup` are
+  addressable for that reason.
 
 ## Exports
 

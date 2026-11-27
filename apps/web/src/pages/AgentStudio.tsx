@@ -15,29 +15,64 @@ const COMMON_TOOLS = ["view", "grep", "glob", "edit", "create", "shell", "web_fe
 const MIN_CREDITS = 30;
 
 export function NewAgent() {
+    const templates = useRpc<any[]>("agents.templates", {}, []);
+    // null until the templates arrive; then the first one is picked so one click creates an agent.
+    const [templateId, setTemplateId] = useState<string | null>(null);
     const [name, setName] = useState("");
     const [description, setDescription] = useState("");
     const [runtime, setRuntime] = useState<"copilot" | "simulated">("simulated");
     const { busy, run } = useAction();
+    const template = templates.data?.find((t) => t.id === templateId);
+    const pick = (id: string) => {
+        const next = templates.data?.find((t) => t.id === id);
+        setTemplateId(id);
+        setName(next?.name ?? "");
+        setDescription(next?.description ?? "");
+    };
+    useEffect(() => {
+        if (templateId === null && templates.data?.length) pick(templates.data[0].id);
+    }, [templates.data]);
     const create = async (e: React.FormEvent) => {
         e.preventDefault();
-        const created = await run(() => rpc<any>("agents.create", { name, description, spec: { runtime } }), "Agent created");
+        const spec = template ? { ...template.spec, runtime } : { runtime };
+        const note = template ? `From the “${template.name}” template` : "Initial revision";
+        const created = await run(() => rpc<any>("agents.create", { name, description, spec, note }), "Agent created");
         if (created) go(`/agents/${created.agent.id}`);
     };
     return (
-        <div className="page" style={{ maxWidth: 640 }}>
+        <div className="page" style={{ maxWidth: 720 }}>
             <header className="page-head">
                 <div>
                     <div className="eyebrow" style={{ marginBottom: 8 }}>
                         <a href="#/agents">Agents</a> / new
                     </div>
                     <h1>New agent</h1>
-                    <p>Name the job. You will write its instructions and choose tools and guardrails next.</p>
+                    <p>Start from a ready-made agent or from nothing. Everything can be changed afterwards: instructions, tools and guardrails.</p>
                 </div>
             </header>
             <form className="card form-section" onSubmit={create}>
+                <div className="field">
+                    <span className="label">Start from</span>
+                    <div className="choice-grid templates">
+                        {templates.data?.map((t) => (
+                            <button key={t.id} type="button" className="choice" aria-pressed={templateId === t.id} onClick={() => pick(t.id)}>
+                                <b>{t.name}</b>
+                                <span>{t.description}</span>
+                            </button>
+                        ))}
+                        <button type="button" className="choice" aria-pressed={templateId === ""} onClick={() => pick("")}>
+                            <b>Blank</b>
+                            <span>No instructions and no tools. Write your own.</span>
+                        </button>
+                    </div>
+                    {template ? (
+                        <span className="hint">
+                            Tools: {template.spec.tools.map((tool: string) => <span key={tool} className="mono">{tool} </span>)}· Nothing changes without your approval. First run on the simulator: {template.firstRun}
+                        </span>
+                    ) : null}
+                </div>
                 <Field label="Name">
-                    <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Issue triage" autoFocus required maxLength={80} />
+                    <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Issue triage" required maxLength={80} />
                 </Field>
                 <Field label="What it is for" hint="One line, shown in lists.">
                     <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Labels new issues and asks for missing details" maxLength={500} />
@@ -47,11 +82,11 @@ export function NewAgent() {
                     <div className="choice-grid">
                         <button type="button" className="choice" aria-pressed={runtime === "simulated"} onClick={() => setRuntime("simulated")}>
                             <b>Simulator</b>
-                            <span>No model, no cost. Exercises tools, guardrails and triggers with synthetic output.</span>
+                            <span>No model, no cost. Exercises tools, guardrails and triggers with synthetic output. Start here.</span>
                         </button>
                         <button type="button" className="choice" aria-pressed={runtime === "copilot"} onClick={() => setRuntime("copilot")}>
                             <b>Copilot</b>
-                            <span>The GitHub Copilot agent runtime. Needs a Copilot-entitled sign-in.</span>
+                            <span>The GitHub Copilot agent runtime. Needs a Copilot subscription, or a model key of your own set on the agent.</span>
                         </button>
                     </div>
                 </div>
@@ -424,6 +459,11 @@ function TestBench({ agentId, dirty, revisionForTest, archived }: { agentId: str
                     <button className="btn primary" disabled={busy || !prompt.trim() || archived}>
                         {dirty ? "Run with unsaved changes" : "Run"}
                     </button>
+                    {prompt.trim() ? null : (
+                        <button type="button" className="btn ghost sm" disabled={busy} onClick={() => act(async () => setPrompt((await rpc<any>("agents.example_task", { agentId })).prompt))}>
+                            Use an example task
+                        </button>
+                    )}
                     {runId ? (
                         <a className="btn ghost sm" href={`#/runs/${runId}`}>
                             Open full trace
