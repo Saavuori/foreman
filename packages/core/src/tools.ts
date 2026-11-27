@@ -127,5 +127,7 @@ export interface ToolInfo {
     description: string;
     kind: ForemanTool["kind"];
     parameters: Record<string, unknown>;
+    /** Arguments a simulated run calls the tool with. */
+    example?: Record<string, unknown>;
 }
 export const toolInfo = (t: ForemanTool): ToolInfo => ({ name: t.name, title: t.title, description: t.description, kind: t.kind, parameters: z.toJSONSchema(t.input, { io: "input" }) as Record<string, unknown> });

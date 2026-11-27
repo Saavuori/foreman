@@ -5,6 +5,8 @@ export interface PermissionSubject {
     /** Runtime permission kind: `shell`, `write`, `read`, `mcp`, `url`, `memory`, `custom-tool`, … */
     kind: string;
     toolName?: string;
+    /** A connection's own verdict (e.g. on an `az` command), used when none of the agent's rules match. */
+    fallback?: PolicyDecision | null;
 }
 
 const READ_KINDS = new Set(["read"]);
@@ -46,6 +48,7 @@ export function evaluatePolicy(policy: AgentSpec["policy"], subject: PermissionS
             return { action: rule.action, reason: `rule "${rule.match}" → ${rule.action}` };
         }
     }
+    if (subject.fallback) return subject.fallback;
     const action = presetAction(policy.autonomy, subject);
     return { action, reason: `autonomy preset "${policy.autonomy}" → ${action}` };
 }

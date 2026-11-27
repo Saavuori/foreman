@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { permissionKindForTool, type RuntimeAdapter, type RuntimeExecution, type RuntimeResult } from "./runtime.ts";
 import type { AgentSpec, Run } from "./schemas.ts";
-import { foremanTool } from "./tools.ts";
+import { foremanTool, type ToolInfo } from "./tools.ts";
 
 /**
  * One beat of a scripted run. Steps emit the same event types the Copilot SDK does, and tool steps
@@ -24,6 +24,8 @@ export type MockStep =
 export interface MockContext {
     run: Run;
     spec: AgentSpec;
+    /** Tools Foreman offers this run beyond the spec's own, such as a connected command-line tool. */
+    extraTools?: ToolInfo[];
 }
 export interface MockScenario {
     name: string;
@@ -39,6 +41,12 @@ const usage = (inputTokens: number, outputTokens: number, cost: number): MockSte
 const subject = (run: Run) => run.prompt.split("\n")[0]!.slice(0, 70);
 /** The ticket a run is about: from the work queue's payload, else the first key in the prompt. */
 const ticketKey = (run: Run): string | undefined => (run.payload as { key?: string } | undefined)?.key ?? /\b[A-Z][A-Z0-9]+-\d+\b/.exec(run.prompt)?.[0];
+
+/** A command-line tool runs the prompt's `$ …` line if it has one, else the connection's harmless test command. */
+function commandArgs(run: Run, tool: ToolInfo): Record<string, unknown> | undefined {
+    const line = /^\$ (.+)$/m.exec(run.prompt)?.[1]?.trim();
+    return line ? { args: line } : tool.example;
+}
 
 /** Foreman's own tools validate their arguments, so the "auto" scenario has to call them with real ones. */
 function foremanToolArgs(tool: string, run: Run): Record<string, unknown> | undefined {
@@ -67,12 +75,13 @@ export const MOCK_SCENARIOS: MockScenario[] = [
         name: "auto",
         title: "Follow the tool list",
         description: "Calls each tool switched on for the agent once, then answers. The default.",
-        script: ({ run, spec }) => {
-            const tools = [...spec.tools.map((tool) => ({ tool, kind: permissionKindForTool(tool) })), ...Object.keys(spec.mcpServers).map((s) => ({ tool: `${s}-call`, kind: "mcp" }))].slice(0, 4);
+        script: ({ run, spec, extraTools = [] }) => {
+            const tools = [...spec.tools.map((tool) => ({ tool, kind: permissionKindForTool(tool) })), ...Object.keys(spec.mcpServers).map((s) => ({ tool: `${s}-call`, kind: "mcp" })), ...extraTools.map((t) => ({ tool: t.name, kind: "custom-tool" }))].slice(0, 4);
+            const examples = Object.fromEntries(extraTools.map((t) => [t.name, commandArgs(run, t)]));
             const toolError = /\[tool-error\]/.test(run.prompt);
             return [
                 { do: "think", intent: "Working out which tools the task needs" },
-                ...tools.map((t): MockStep => ({ do: "tool", ...t, args: foremanToolArgs(t.tool, run) ?? { input: run.prompt.slice(0, 80) }, result: `Simulated result from ${t.tool}`, fail: toolError ? "Simulated tool failure (prompt contained [tool-error])" : undefined })),
+                ...tools.map((t): MockStep => ({ do: "tool", ...t, args: examples[t.tool] ?? foremanToolArgs(t.tool, run) ?? { input: run.prompt.slice(0, 80) }, result: `Simulated result from ${t.tool}`, fail: toolError ? "Simulated tool failure (prompt contained [tool-error])" : undefined })),
                 usage(400 + run.prompt.length + spec.instructions.length, 120 + tools.length * 40, 1 + tools.length * 0.5),
                 ...(/\[fail\]/.test(run.prompt) ? [{ do: "fail", error: "Simulated failure (prompt contained [fail])" } as MockStep] : []),
                 { do: "say", content: `Simulated run complete. ${tools.length ? `Used ${tools.map((t) => t.tool).join(", ")}.` : "No tools were needed."}` },
@@ -343,7 +352,7 @@ export class SimulatedRuntime implements RuntimeAdapter {
                     case "tool": {
                         const toolCallId = `call_${++calls}`;
                         const args = step.args ?? {};
-                        if (foremanTool(step.tool)) {
+                        if (foremanTool(step.tool) || x.tools.available.some((t) => t.name === step.tool)) {
                             // One of Foreman's own tools: really call it, guardrails included.
                             emit("tool.execution_start", { toolCallId, toolName: step.tool, arguments: args, parentToolCallId: parent });
                             await pause(step.beats ?? 1);
@@ -368,7 +377,7 @@ export class SimulatedRuntime implements RuntimeAdapter {
         emit("session.start", { sessionId, model: spec.model, simulated: true, scenario: scenario.name });
         emit("user.message", { content: run.prompt, source: `automation-${run.source.kind}` });
         emit("assistant.turn_start", { turnId: "1" });
-        await play(scenario.script({ run, spec }));
+        await play(scenario.script({ run, spec, extraTools: x.tools.available.filter((t) => t.kind !== "internal" && !spec.tools.includes(t.name)) }));
 
         const output = scenario.output?.({ run, spec }) ?? (spec.outputSchema ? JSON.stringify(sampleFromSchema(spec.outputSchema)) : `${last}\n\n(Mock scenario "${scenario.name}" — no model was called.)`);
         emit("assistant.message", { content: output });

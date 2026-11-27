@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getCapabilities, go, onUnauthorised, setToken, useLive, useRoute, useRpc } from "./api.ts";
 import { AgentStudio, NewAgent } from "./pages/AgentStudio.tsx";
 import { Connect } from "./pages/Connect.tsx";
+import { Connections } from "./pages/Connections.tsx";
 import { Home } from "./pages/Home.tsx";
 import { Activity, Agents, Approvals, Runs } from "./pages/Lists.tsx";
 import { RunDetail } from "./pages/RunDetail.tsx";
@@ -14,6 +15,7 @@ const NAV = [
     { path: "/", label: "Board", match: "" },
     { path: "/work", label: "Work", match: "work" },
     { path: "/agents", label: "Agents", match: "agents" },
+    { path: "/connections", label: "Connections", match: "connections" },
     { path: "/runs", label: "Runs", match: "runs" },
     { path: "/approvals", label: "Approvals", match: "approvals" },
     { path: "/notifications", label: "Notifications", match: "notifications" },
@@ -31,8 +33,10 @@ function Page({ route }: { route: string[] }) {
             return id === "batch" ? <Work batchId={route[2] ?? ""} /> : id === "setup" ? <Work view="setup" /> : <Work itemId={id} />;
         case "agents":
             return id === "new" ? <NewAgent /> : id ? <AgentStudio key={id} agentId={id} /> : <Agents />;
+        case "connections":
+            return <Connections />;
         case "runs":
-            return id ? <RunDetail key={id} runId={id} /> : <Runs />;
+            return id ?<RunDetail key={id} runId={id} /> : <Runs />;
         case "notifications":
             return <Notifications view={id} />;
         case "approvals":

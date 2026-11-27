@@ -108,6 +108,33 @@ through the agent's guardrails, so a rule `jira_transition → ask` keeps a pers
 
 ![Agent studio for "Bug triage": instructions, runtime, mock scenario, built-in tools, and on the side a test bench, triggers and revisions](docs/screenshots/agent-studio.png)
 
+## Tools: Jira, Confluence, Azure, Power Platform and more
+
+Set each tool up once under **Connections**, then switch it on for the agents that need it in the
+studio's Tools section. A change to a connection reaches every agent that uses it from its next run.
+
+- **Presets** for Jira (Foreman's own tools), Confluence Data Center and Cloud (the
+  `mcp-atlassian` MCP server), the Azure CLI, the Power Platform CLI (`pac`), the Azure MCP
+  server, and any other command-line tool or MCP server. Tokens typed into a preset go straight
+  into the encrypted vault.
+- **Rules per connection.** For a command line, word patterns: the Azure CLI preset allows
+  `az * list` and `az * show`, never allows `az * delete` or `az login`, and asks a person for
+  anything else. For an MCP server, its tool names. An agent's own guardrail rules come first.
+- **Command lines are run by Foreman**, without a shell, so they work on every runtime (also the
+  simulator and your own model key), each command is checked against the rules and shown in the
+  trace, and a connection can have its own sign-in: the Azure CLI preset can keep a separate
+  `az login` per connection.
+- **Test** runs a harmless command (`az account show`, `pac org who`) or starts the MCP server and
+  lists its tools.
+
+Honest limits: MCP server connections (Confluence, Azure MCP) load only on the Copilot runtime with
+a Copilot account, like any agent MCP server. `pac` keeps one sign-in per user on the server, so
+every Power Platform connection uses the profile selected there. Commands run in a temporary
+folder, not in a repository or the agent's workspace, so tools that act on local files (such as
+`git log`) need the path in their arguments. None of the presets has been run
+against a real Azure tenant, Power Platform environment or Confluence yet; only the command
+runner, the rules and the MCP test (against Foreman's own MCP endpoint) are tested.
+
 ## Secrets
 
 Credentials are encrypted at rest (AES-256-GCM), can be stored and used but never read back — in

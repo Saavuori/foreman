@@ -298,3 +298,76 @@ describe("getting started", () => {
         await f.stop();
     });
 });
+
+describe("connections", () => {
+    const toolSteps = async (call: any, runId: string) => (await call("runs.timeline", { runId })).steps.filter((s: any) => s.kind === "tool");
+
+    it("matches command rules word by word", async () => {
+        const { commandMatches, cliDecision, splitArgs } = await import("./index.ts");
+        expect(splitArgs(`group list --query "[].name" -o 'table'`)).toEqual(["group", "list", "--query", "[].name", "-o", "table"]);
+        expect(commandMatches("az * list", ["az", "group", "list", "--output", "table"])).toBe(true);
+        expect(commandMatches("az * list", ["az", "group", "create", "--tags", "list"])).toBe(false);
+        const rules = { allow: ["az * list"], ask: [], deny: ["az * delete"] };
+        expect(cliDecision(rules, ["az", "group", "delete", "--name", "x"])?.action).toBe("deny");
+        expect(cliDecision(rules, ["az", "vm", "start"])).toBeNull();
+    });
+
+    it("runs a connected command-line tool under its own rules", async () => {
+        const { f, call } = boot();
+        const presets = await call<any[]>("connections.presets");
+        expect(presets.map((p) => p.id)).toEqual(expect.arrayContaining(["jira", "confluence-dc", "azure-cli", "power-platform-cli", "azure-mcp", "custom-cli", "custom-mcp"]));
+        // `node` stands in for az or pac: it is on every machine that runs these tests.
+        const node = await call("connections.create", { name: "Node", preset: "custom-cli", values: { command: process.execPath, testArgs: "--version" }, rules: { allow: ["* --version"], ask: [], deny: ["* -e"] } });
+        expect(node.toolName).toBe("run_node");
+        expect(await call("connections.test", { connectionId: node.id })).toMatchObject({ ok: true });
+
+        const { agent } = await call("agents.create", { name: "Runner", spec: { ...sim, connections: [node.id] } });
+        expect((await call<any[]>("connections.list"))[0].usedBy).toEqual([{ id: agent.id, name: "Runner" }]);
+
+        // Allowed by the connection's rule: really runs, without a person.
+        const allowed = await call<Run>("runs.start", { agentId: agent.id, prompt: "Which version?\n$ --version", waitSeconds: 10 });
+        expect(allowed.status).toBe("succeeded");
+        const [ran] = await toolSteps(call, allowed.id);
+        expect(ran).toMatchObject({ title: "run_node", status: "ok" });
+        expect(JSON.stringify(ran)).toContain(process.version);
+
+        // Refused by the connection's rule.
+        const refused = await call<Run>("runs.start", { agentId: agent.id, prompt: "$ -e 1", waitSeconds: 10 });
+        expect(JSON.stringify(await toolSteps(call, refused.id))).toContain("Permission denied");
+
+        // Not covered by any rule: the agent's autonomy decides ("propose" asks).
+        const asked = await call<Run>("runs.start", { agentId: agent.id, prompt: "$ --help", waitSeconds: 10 });
+        expect(asked.status).toBe("waiting_approval");
+        await call("runs.cancel", { runId: asked.id });
+
+        // Anything a shell would act on is refused before it runs.
+        const chained = await call<Run>("runs.start", { agentId: agent.id, prompt: "$ --version && whoami", waitSeconds: 10 });
+        expect(JSON.stringify(await toolSteps(call, chained.id))).toMatch(/character a shell would act on/);
+
+        await expect(call("connections.delete", { connectionId: node.id })).rejects.toThrow(/Used by Runner/);
+        await f.stop();
+    });
+
+    it("gives agents MCP servers and Jira tools with the connection's rules", async () => {
+        const { f, call } = boot();
+        await call("secrets.set", { name: "conf-token", secretValue: "pat-123456789" });
+        await expect(call("connections.create", { name: "Docs", preset: "confluence-dc", values: { url: "https://confluence.example.test", token: "missing" } })).rejects.toThrow(/does not exist/);
+        const docs = await call("connections.create", { name: "Docs", preset: "confluence-dc", values: { url: "https://confluence.example.test", token: "conf-token", spaces: "ENG" }, rules: { allow: [], ask: [], deny: ["confluence_create_page"] } });
+        expect(docs.mcp).toMatchObject({ type: "stdio", command: "uvx", env: { CONFLUENCE_PERSONAL_TOKEN: "{{secret:conf-token}}", CONFLUENCE_SPACES_FILTER: "ENG", READ_ONLY_MODE: "true" } });
+        expect((await call("secrets.list")).secrets.find((s: any) => s.name === "conf-token").usedBy).toContain("Connection: Docs");
+        const jira = await call("connections.create", { name: "Jira", preset: "jira", values: { writes: true } });
+
+        const { agent } = await call("agents.create", { name: "Reader", spec: { ...sim, policy: { autonomy: "act" }, connections: [docs.id, jira.id, "con_gone"] } });
+        const applied = f.connections.apply(f.store.getRevision(agent.activeRevisionId)!.spec);
+        expect(Object.keys(applied.spec.mcpServers)).toEqual(["docs"]);
+        expect(applied.spec.tools).toEqual(expect.arrayContaining(["jira_get_issue", "jira_add_comment"]));
+        expect(applied.spec.policy.rules).toEqual(expect.arrayContaining([expect.objectContaining({ match: "mcp:docs-confluence_create_page", action: "deny" }), expect.objectContaining({ match: "jira_add_comment", action: "ask" })]));
+        expect(applied.missing).toEqual(["con_gone"]);
+
+        // The trace names the connections a run used, and the ones that no longer exist.
+        const run = await call<Run>("runs.start", { agentId: agent.id, prompt: "Hello", waitSeconds: 10 });
+        const { events } = await call("runs.events", { runId: run.id });
+        expect(events.find((e: any) => e.type === "foreman.run_started").data).toMatchObject({ connections: ["Docs", "Jira"], missingConnections: ["con_gone"] });
+        await f.stop();
+    });
+});

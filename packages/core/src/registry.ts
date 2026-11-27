@@ -10,6 +10,7 @@ import type { MockJira } from "./jira.ts";
 import type { WorkHub } from "./work.ts";
 import type { Vault } from "./vault.ts";
 import type { BatchHub } from "./batches.ts";
+import type { ConnectionHub } from "./connections.ts";
 import type { MockBotFramework, TeamsBot } from "./teamsbot.ts";
 
 /** Who is calling. Every capability call is attributed and audited. */
@@ -25,7 +26,7 @@ export interface BusEvents {
     event: [event: RunEvent];
     approval: [approval: Approval];
     /** Coarse "something in this collection changed" signal for live UIs. */
-    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify" | "setup"];
+    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify" | "setup" | "connections"];
     /** A work item changed state. */
     work: [item: WorkItem, previous: WorkState];
     /** Something a person should hear about that has no run or ticket behind it. */
@@ -42,6 +43,7 @@ export interface Services {
     store: Store;
     bus: Bus;
     engine: Engine;
+    connections: ConnectionHub;
     triggers: TriggerHub;
     work: WorkHub;
     mockJira: MockJira;

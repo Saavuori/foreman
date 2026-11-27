@@ -142,6 +142,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
     const runs = useRpc<any[]>("runs.list", { agentId, limit: 8 }, ["run"]);
     const models = useRpc<any[]>("system.models", {}, []);
     const ownTools = useRpc<any[]>("system.agent_tools", {}, []);
+    const connections = useRpc<any[]>("connections.list", {}, ["connections"]);
     const secrets = useRpc<any>("secrets.list", {}, ["audit"]);
     const { busy, run: act } = useAction();
 
@@ -312,6 +313,25 @@ export function AgentStudio({ agentId }: { agentId: string }) {
 
                         <section className="form-section">
                             <h3>Tools</h3>
+                            <div className="field">
+                                <span className="label">Connections</span>
+                                <div className="row wrap" style={{ gap: 6 }}>
+                                    {(connections.data ?? []).map((c) => (
+                                        <button key={c.id} type="button" className="chip" aria-pressed={spec.connections.includes(c.id)} title={c.description} onClick={() => set({ connections: spec.connections.includes(c.id) ? spec.connections.filter((id) => id !== c.id) : [...spec.connections, c.id] })}>
+                                            {c.name}
+                                        </button>
+                                    ))}
+                                    {spec.connections.filter((id) => connections.data && !connections.data.some((c) => c.id === id)).map((id) => (
+                                        <button key={id} type="button" className="chip" aria-pressed title="This connection was deleted. Click to take it off." onClick={() => set({ connections: spec.connections.filter((x) => x !== id) })}>
+                                            deleted connection
+                                        </button>
+                                    ))}
+                                    <a className="btn ghost sm" href="#/connections">
+                                        {connections.data?.length ? "Manage connections" : "Set up a connection"}
+                                    </a>
+                                </div>
+                                <span className="hint">Jira, Confluence, Azure CLI, Power Platform CLI and other tools, set up once under Connections with their own rules. Switch on the ones this agent needs.</span>
+                            </div>
                             <div className="field">
                                 <span className="label">Built-in tools</span>
                                 <div className="row wrap" style={{ gap: 6 }}>

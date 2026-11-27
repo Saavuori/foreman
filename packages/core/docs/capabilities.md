@@ -14,6 +14,7 @@ Files: `src/registry.ts` (machinery), `src/capabilities/*.ts` (definitions).
 | `notify.ts` | `notify.*`, `channels.*`, `notifyrules.*`, `mockteams.messages` / `clear` |
 | `teams.ts` | `teamsbot.*`, `mockteams.install` / `press` |
 | `vault.ts` | `secrets.*`, `system.agent_tools` |
+| `connections.ts` | `connections.*` (tools set up once and given to agents: MCP servers, command lines, Jira) |
 | `setup.ts` | `setup.*` (the getting-started checklist), `agents.templates`, `agents.example_task`, `samples.*` |
 | `ops.ts` | `triggers.*`, `insights.*`, `audit.list`, `system.*`, `capabilities.search` |
 

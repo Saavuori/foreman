@@ -13,7 +13,7 @@ export interface AgentTemplate {
     spec: AgentSpecInput;
 }
 
-/** Foreman's Jira tools are custom tools, which "propose" allows; a template promises to ask first. */
+/** A template promises to ask before it changes a ticket, and keeps that promise if the agent is later moved to "act". */
 const JIRA_WRITES_ASK = ["jira_add_comment", "jira_create_subtask", "jira_transition"].map((match) => ({ match, action: "ask" as const, note: "A person approves changes to Jira" }));
 
 /** Every template starts on the simulator with "propose" autonomy: nothing changes without a person's approval. */
@@ -195,7 +195,7 @@ export function removeSamples(s: Pick<Services, "store" | "notify" | "work" | "b
 // ── The "Get started" checklist ────────────────────────────────────────────
 
 export interface SetupStep {
-    id: "agent" | "run" | "intake" | "routing" | "notify" | "model" | "mcp";
+    id: "agent" | "run" | "intake" | "routing" | "tools" | "notify" | "model" | "mcp";
     title: string;
     text: string;
     done: boolean;
@@ -206,7 +206,7 @@ export interface SetupStep {
 }
 
 /** Work out each step from what is really set up. Sample data does not count as a person's own. */
-export function setupStatus(s: Pick<Services, "store" | "notify" | "work">) {
+export function setupStatus(s: Pick<Services, "store" | "notify" | "work" | "connections">) {
     const record = sampleRecord(s);
     const sample = new Set([...(record?.agentIds ?? []), ...(record?.ruleIds ?? []), ...(record?.channelIds ?? [])]);
     const agents = s.store.listAgents().filter((a) => !sample.has(a.id));
@@ -219,6 +219,7 @@ export function setupStatus(s: Pick<Services, "store" | "notify" | "work">) {
     const channel = s.notify.listChannels().some((c) => !sample.has(c.id));
     const onModel = agents.find((a) => s.store.getRevision(a.activeRevisionId)?.spec.runtime === "copilot" && s.store.listRuns({ agentId: a.id, status: ["succeeded"], limit: 1 }).length);
     const mcpSeen = s.store.getSetting<string>("setup.mcpSeen");
+    const tooled = s.connections.list().find((c) => s.connections.usedBy(c.id).some((a) => own.has(a.id)));
     const steps: SetupStep[] = [
         {
             id: "agent",
@@ -256,6 +257,17 @@ export function setupStatus(s: Pick<Services, "store" | "notify" | "work">) {
             optional: false,
             path: "/work/setup",
             action: "Add a rule",
+        },
+        {
+            id: "tools",
+            title: "Give agents their tools",
+            text: tooled
+                ? `“${tooled.name}” is switched on for an agent.`
+                : "Set up Jira, Confluence, the Azure CLI, the Power Platform CLI or any MCP server once, with what agents may do with it, then switch it on for the agents that need it.",
+            done: !!tooled,
+            optional: true,
+            path: "/connections",
+            action: "Connections",
         },
         {
             id: "notify",

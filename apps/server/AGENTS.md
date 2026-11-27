@@ -13,6 +13,7 @@ first.
 | `src/app.ts` | `buildApp(options)` — all routes. A fresh install starts empty; the Board's getting-started checklist takes it from there |
 | `src/mcp.ts` | `createMcpServer(backend)` — tools, resources and prompts from the registry |
 | `src/mcp-stdio.ts` | A stdio MCP server that forwards to a running Foreman over HTTP |
+| `src/probe.ts` | `probeMcp` — starts an MCP server (stdio or http) and lists its tools, for `connections.test`. Passed to core as an option because core has no MCP client |
 | `src/demo.ts` | `startDemo` — the sample data from core's `loadSamples`, plus the Teams bot, a batch and the ticket generator |
 | `src/server.test.ts` | Integration tests over real HTTP and a real MCP client |
 

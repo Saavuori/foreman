@@ -43,7 +43,9 @@ first. Do not bypass `emit` to write events.
 
 1. Try `spec.policy.rules` top to bottom. A rule's `match` is a glob tested against `kind`,
    `kind:toolName` and `toolName`. First match wins.
-2. Otherwise the autonomy preset decides:
+2. Otherwise the subject's `fallback`, if given: a connection's own verdict for a command
+   (see Connections below). The agent's rules still come first, so a person can override it.
+3. Otherwise the autonomy preset decides:
 
 | Preset | read | write, mcp, url, custom-tool, memory | shell |
 |---|---|---|---|
@@ -57,6 +59,32 @@ first. Do not bypass `emit` to write events.
 
 `summary` is the one line a person approves from — make it specific
 (`shell: git push origin main`, `Jira: change status — PAY-12 → Done`).
+
+## Connections (`connections.ts`)
+
+A connection is a tool set up once — an MCP server, a command line or Jira — with its own rules,
+and named by id in `spec.connections`. At the start of each run `ConnectionHub.apply(spec)`
+folds them into the spec the runtime sees, so runtimes know nothing about connections:
+
+| Kind | Becomes | Rules |
+|---|---|---|
+| `mcp` | An entry in `spec.mcpServers` under the connection's key | Globs on the server's tool names, turned into `mcp:<key>-<tool>` policy rules after the agent's own |
+| `jira` | Foreman's Jira tools added to `spec.tools` (writes only if `jira.writes`) | Globs on the tool names |
+| `cli` | A Foreman tool `run_<key>` with one argument, `args` | Word patterns: `az * list` (`*` is one word, more arguments may follow), via `cliDecision` |
+
+Command lines are run by Foreman, not by the runtime's shell, so they work on every runtime and
+can have their own identity (environment, `{{secret:..}}`, `{{connection_home}}` for a separate
+sign-in folder). A call is authorised as kind `shell` with `fallback` set to the connection's
+verdict (deny > ask > allow; no match → the autonomy preset, which asks for `shell` in
+`propose` and `act`). `runProgram` spawns without a shell; an argument holding a character a
+shell would act on (`& | ; < > $` …) is refused before the policy check, because on Windows a
+`.cmd` program does go through `cmd.exe`. Output is scrubbed of secret values.
+
+The run's `run_started` event lists the connections used and any `missingConnections`
+(deleted since the agent was saved); those are left out of the run rather than failing it.
+
+MCP connections still need the Copilot runtime with a Copilot account to load, like any MCP
+server. `connections.test` starts one through `ForemanOptions.probeMcp` (from `apps/server`).
 
 ## Writing a runtime (`runtime.ts`)
 
@@ -96,7 +124,7 @@ Adding a scenario: append to `MOCK_SCENARIOS` with a `script(ctx)` returning `Mo
 | Step | Effect |
 |---|---|
 | `think` | An intent line in the trace |
-| `tool` | A tool call. If the name is one of Foreman's tools it is **really executed**; otherwise the result is the scripted text. Either way guardrails apply |
+| `tool` | A tool call. If the name is one of Foreman's tools or a connection's command line it is **really executed**; otherwise the result is the scripted text. Either way guardrails apply |
 | `ask` | Calls `ask_for_info` and continues with the `answered(answer)` or `unanswered` branch |
 | `progress` | Drives the progress bar |
 | `subagent` | Nested steps attributed to a sub-agent |
@@ -107,6 +135,10 @@ Adding a scenario: append to `MOCK_SCENARIOS` with a `script(ctx)` returning `Mo
 
 The scenario appears in the UI's picker and in `system.mock_scenarios` automatically. Errors
 whose text matches the `TRANSIENT` pattern in `work.ts` are retried by the work queue.
+
+In `auto`, an agent's command-line connections are called too. The arguments come from a line
+in the prompt that starts with `$ ` (`$ account show`), else from the connection's test
+command — so a test-bench run can try one real, harmless command.
 
 `beatMs` (constructor) is the length of one step; tests pass `0`.
 

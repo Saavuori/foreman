@@ -683,3 +683,33 @@ describe("getting started", () => {
         expect((await call("audit.list", {})).some((a: any) => a.capability === "samples.remove" && a.actor === "mcp:test-client")).toBe(true);
     });
 });
+
+describe("connections", () => {
+    it("sets up an MCP server once with a stored token, tests it and gives it to an agent, over MCP", async () => {
+        // Foreman's own MCP endpoint is the MCP server under test: it needs the bearer token.
+        await tool("secrets_set", { name: "self-mcp-token", secretValue: TOKEN });
+        const connection = await tool("connections_create", { name: "Foreman itself", preset: "custom-mcp", values: { url: `${base}/mcp`, token: "self-mcp-token" } });
+        expect(connection.mcp.headers.Authorization).toBe("Bearer {{secret:self-mcp-token}}");
+        expect(connection.secrets).toEqual(["self-mcp-token"]);
+
+        const test = await tool("connections_test", { connectionId: connection.id });
+        expect(test.ok).toBe(true);
+        expect(test.tools).toEqual(expect.arrayContaining(["connections_list", "runs_start"]));
+
+        // Without the token the same server refuses, and the test says so instead of throwing.
+        await tool("secrets_set", { name: "self-mcp-token", secretValue: "wrong" });
+        const refused = await tool("connections_test", { connectionId: connection.id });
+        expect(refused.ok).toBe(false);
+        expect(JSON.stringify(refused)).not.toContain(TOKEN);
+
+        expect((await tool("setup_status")).steps.find((s: any) => s.id === "tools").done).toBe(false);
+        const { agent } = await tool("agents_create", { name: "Uses a connection", spec: { connections: [connection.id] } });
+        expect((await tool("connections_list")).find((c: any) => c.id === connection.id).usedBy).toEqual([{ id: agent.id, name: "Uses a connection" }]);
+        expect((await tool("setup_status")).steps.find((s: any) => s.id === "tools").done).toBe(true);
+
+        await expect(tool("connections_delete", { connectionId: connection.id })).rejects.toThrow(/Used by Uses a connection/);
+        await tool("connections_delete", { connectionId: connection.id, force: true });
+        await tool("agents_archive", { agentId: agent.id });
+        await tool("secrets_delete", { name: "self-mcp-token" });
+    });
+});

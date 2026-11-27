@@ -16,6 +16,7 @@ function usage(ctx: Ctx): Map<string, string[]> {
         if (spec) for (const name of Vault.references(JSON.stringify(spec.mcpServers))) add(name, `Agent: ${agent.name}`);
         if (spec?.provider?.secretName) add(spec.provider.secretName, `Agent: ${agent.name} (model key)`);
     }
+    for (const c of ctx.connections.list()) for (const name of Vault.references(JSON.stringify([c.mcp, c.cli]))) add(name, `Connection: ${c.name}`);
     return used;
 }
 

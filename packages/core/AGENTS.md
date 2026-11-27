@@ -26,6 +26,7 @@ here; `apps/server` and `apps/web` are thin layers over this package. Read the r
 | `notify.ts` | Notification hub, channels, rules, Adaptive Cards, mock Teams | [notifications.md](docs/notifications.md) |
 | `teamsbot.ts` | Teams bot (Bot Framework protocol, token checks, card buttons) and the mock Bot Framework | [notifications.md](docs/notifications.md) |
 | `vault.ts` | Encrypted secrets, sealing, scrubbing | [secrets.md](docs/secrets.md) |
+| `connections.ts` | Connections: tools set up once (MCP servers, command lines, Jira), their presets and rules, `apply` (folds an agent's connections into its spec), running a command line without a shell | [run-engine.md](docs/run-engine.md) |
 | `onboarding.ts` | Getting started: agent templates, sample data (load/remove), the checklist (`setupStatus`), example tasks | below |
 | `index.ts` | `createForeman(options)`: builds and wires everything; the package's exports | below |
 | `core.test.ts` | Unit-level tests through the registry | below |
@@ -35,7 +36,7 @@ here; `apps/server` and `apps/web` are thin layers over this package. Read the r
 `createForeman` in `index.ts` is the only place objects are constructed. Order matters:
 
 ```
-Store → Bus → runtimes → Vault → Engine → TriggerHub → MockJira → WorkHub → NotifyHub
+Store → Bus → runtimes → Vault → ConnectionHub → Engine → TriggerHub → MockJira → WorkHub → NotifyHub
       → MockBotFramework → TeamsBot (notify.setBot) → BatchHub → Registry → bot.setDecider
 ```
 
@@ -63,7 +64,7 @@ new kind of `change`, add the entity name to `BusEvents["change"]` **and** to th
 
 - One SQLite file, `<dataDir>/foreman.db`, or `:memory:` when `memory: true` (tests, demo).
 - Core tables are created by the `SCHEMA` string in `store.ts`. Hubs that own their own tables
-  (`notify.ts`, `vault.ts`, `batches.ts`) create them in their constructor with
+  (`notify.ts`, `vault.ts`, `batches.ts`, `connections.ts`) create them in their constructor with
   `store.db.exec(SCHEMA)` and query through `store.db` directly.
 - There is **no migration system**. Every statement is `CREATE TABLE IF NOT EXISTS`. Adding a
   column to an existing table needs an explicit `ALTER TABLE … ADD COLUMN` guarded so it runs
@@ -104,8 +105,8 @@ The checklist on the Board comes from `setup.status`, which works each step out 
   switched on. `samples.remove` archives the agents (runs stay in history) and deletes the rest.
   The demo loads the samples too (`apps/server/src/demo.ts`) and hides the checklist.
 - **Templates keep their promise.** Every template runs on the simulator with autonomy
-  `propose`. Foreman's Jira tools are custom tools, which `propose` allows, so templates that
-  write to Jira carry explicit `ask` rules. A test checks that a template's first run stops for
+  `propose`. Templates that write to Jira also carry explicit `ask` rules, so they keep asking if
+  the agent is later moved to `act` (which allows custom tools). A test checks that a template's first run stops for
   approval.
 - The MCP step is ticked by the registry on the first call from an `mcp` actor
   (`setup.mcpSeen`).

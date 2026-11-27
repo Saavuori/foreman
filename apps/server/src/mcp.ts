@@ -22,6 +22,7 @@ Typical flows:
 - Debug: runs_list (status failed) → runs_explain_failure → runs_timeline → agents_update → runs_replay.
 - Tune: insights_summary and insights_tool_usage → agents_update with activate=false → runs_start with revisionId → revisions_activate.
 Agents default to autonomy "propose": writes wait in approvals_list until approvals_decide. New agents use runtime "simulated" (a mock that calls no model); set spec.runtime to "copilot" for real runs, either with Copilot access or with spec.provider naming a model endpoint and a stored key (secrets_set) — then spec.model must be the provider's model id, not "auto".
+- Tools: connections_presets → secrets_set (for any token) → connections_create { preset, name, values } → connections_test → agents_update { spec: { connections: [id] } }. A command-line connection reaches the agent as a tool run_<key>, each command checked against the connection's rules.
 - Teams: teamsbot_status → teamsbot_configure → channels_create kind "teams_bot" → notifyrules_create, so approvals and questions can be decided from a Teams card.`;
 
 const PROMPTS = [

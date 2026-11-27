@@ -7,12 +7,32 @@ import type { Store } from "./store.ts";
 import type { JiraClient } from "./jira.ts";
 import { FOREMAN_TOOLS, foremanTool, toolEnabled, toolInfo } from "./tools.ts";
 import { z } from "zod";
+import { cliDecision, runProgram, splitArgs, unsafeArgs, type ConnectionHub, type CliTool } from "./connections.ts";
+import type { ToolInfo } from "./tools.ts";
+
+/** How a connected command-line tool is offered to the model. */
+function cliToolInfo(t: CliTool): ToolInfo {
+    const c = t.connection;
+    const command = c.cli!.command;
+    const allowed = c.rules.allow.length ? ` Allowed without asking: ${c.rules.allow.join("; ")}.` : "";
+    const refused = c.rules.deny.length ? ` Always refused: ${c.rules.deny.join("; ")}.` : "";
+    return {
+        name: t.name,
+        title: c.name,
+        description: `Run ${command} (${c.name}). Give the arguments as one line, as you would type them after "${command}". One command per call: no pipes, redirects or chaining. Other commands wait for a person's approval.${allowed}${refused}`,
+        kind: "custom-tool",
+        parameters: { type: "object", properties: { args: { type: "string", description: `Arguments after "${command}", e.g. "${c.cli!.testArgs.join(" ")}"` } }, required: ["args"] },
+        example: { args: c.cli!.testArgs.join(" ") },
+    };
+}
 
 export interface EngineOptions {
     concurrency: number;
     /** Removes vault values from anything about to be recorded. */
     scrub?: <T>(data: T) => T;
     resolveSecrets?: (text: string) => string;
+    /** Applies an agent's connections (MCP servers, command-line tools, Jira) to its spec for a run. */
+    connections?: ConnectionHub;
 }
 
 interface Active {
@@ -111,6 +131,31 @@ export class Engine {
         }
     }
 
+    /** A connected command-line tool: checked against the connection's rules and the agent's guardrails, then run without a shell. */
+    private async runCli(tool: CliTool, args: unknown, authorize: (r: AuthorizeRequest) => Promise<{ allowed: boolean; reason: string }>, signal: AbortSignal): Promise<{ ok: boolean; content: string }> {
+        const { connection } = tool;
+        const { command, env, timeoutSeconds } = connection.cli!;
+        const line = typeof (args as { args?: unknown })?.args === "string" ? (args as { args: string }).args : "";
+        const argv = splitArgs(line);
+        // Agents often repeat the program name; the tool already knows it.
+        if (argv[0]?.toLowerCase() === command.toLowerCase()) argv.shift();
+        const shown = [command, ...argv].join(" ");
+        const unsafe = unsafeArgs(argv);
+        if (unsafe) return { ok: false, content: unsafe };
+        const verdict = await authorize({ kind: "shell", toolName: tool.name, summary: `${connection.name}: ${shown}`.slice(0, 200), request: { toolName: tool.name, command, args: argv }, fallback: cliDecision(connection.rules, [command, ...argv]) });
+        if (!verdict.allowed) return { ok: false, content: `Permission denied: ${verdict.reason}` };
+        const resolve = this.opts.resolveSecrets ?? ((text: string) => text);
+        const scrub = this.opts.scrub ?? (<T,>(d: T) => d);
+        try {
+            const filled = Object.fromEntries(Object.entries(env).map(([k, v]) => [k, resolve(this.opts.connections!.localise(connection, v))]));
+            const result = await runProgram(command, argv, { env: filled, timeoutSeconds, signal });
+            const head = result.timedOut ? `Stopped after ${timeoutSeconds}s.` : `Exit code ${result.exitCode}.`;
+            return { ok: !result.timedOut && result.exitCode === 0, content: scrub(`${head}\n${result.output}`.trim()) };
+        } catch (e) {
+            return { ok: false, content: e instanceof Error ? e.message : String(e) };
+        }
+    }
+
     private async execute(runId: string, state: Active) {
         const { store, bus } = this;
         let run = store.getRun(runId)!;
@@ -134,12 +179,13 @@ export class Engine {
         };
 
         if (!revision) return finish("failed", { error: `Revision ${run.revisionId} no longer exists` });
-        const spec = revision.spec;
+        const applied = this.opts.connections ? this.opts.connections.apply(revision.spec) : { spec: revision.spec, cliTools: [] as CliTool[], used: [], missing: [] as string[] };
+        const spec = applied.spec;
         const runtime = this.runtimes[spec.runtime];
         if (!runtime) return finish("failed", { error: `Runtime "${spec.runtime}" is not available on this server` });
 
         setStatus({ status: "running", startedAt: new Date().toISOString() });
-        emit("foreman.run_started", { runtime: runtime.name, model: spec.model, autonomy: spec.policy.autonomy, budget: spec.budget });
+        emit("foreman.run_started", { runtime: runtime.name, model: spec.model, autonomy: spec.policy.autonomy, budget: spec.budget, ...(applied.used.length ? { connections: applied.used.map((c) => c.name) } : {}), ...(applied.missing.length ? { missingConnections: applied.missing } : {}) });
         const timer = setTimeout(() => {
             state.timedOut = true;
             state.abort.abort();
@@ -173,8 +219,10 @@ export class Engine {
             return verdict.allowed ? verdict.reason : null;
         };
         const tools = {
-            available: FOREMAN_TOOLS.filter((t) => toolEnabled(t, spec.tools)).map(toolInfo),
+            available: [...FOREMAN_TOOLS.filter((t) => toolEnabled(t, spec.tools)).map(toolInfo), ...applied.cliTools.map(cliToolInfo)],
             call: async (name: string, args: unknown): Promise<{ ok: boolean; content: string }> => {
+                const cli = applied.cliTools.find((t) => t.name === name);
+                if (cli) return this.runCli(cli, args, authorize, state.abort.signal);
                 const tool = foremanTool(name);
                 if (!tool) return { ok: false, content: `Unknown tool "${name}"` };
                 if (!toolEnabled(tool, spec.tools)) return { ok: false, content: `${name} is not switched on for this agent` };

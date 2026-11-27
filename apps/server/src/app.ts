@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { CapabilityError, createForeman, mockModelReply, plainText, type Actor, type ForemanOptions } from "@foreman/core";
 import { createMcpServer } from "./mcp.ts";
+import { probeMcp } from "./probe.ts";
 
 export interface AppOptions extends ForemanOptions {
     /** When set, the API and MCP endpoints require `Authorization: Bearer <token>`. */
@@ -18,7 +19,7 @@ const safeEqual = (a: string, b: string) => a.length === b.length && timingSafeE
 const STATUS: Record<string, number> = { not_found: 404, invalid_input: 400, conflict: 409, failed: 500 };
 
 export async function buildApp(options: AppOptions): Promise<{ app: FastifyInstance; foreman: ReturnType<typeof createForeman> }> {
-    const foreman = createForeman(options);
+    const foreman = createForeman({ probeMcp, ...options });
     const { registry, bus, store, triggers } = foreman;
     const app = Fastify({ logger: options.logger ?? false, bodyLimit: 5 * 1024 * 1024 });
 

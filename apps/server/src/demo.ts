@@ -1,4 +1,4 @@
-import { loadSamples, type createForeman } from "@foreman/core";
+import { CONNECTION_PRESETS, ConnectionInput, loadSamples, type createForeman } from "@foreman/core";
 
 type Foreman = ReturnType<typeof createForeman>;
 
@@ -11,6 +11,19 @@ export function startDemo(foreman: Foreman): () => void {
     loadSamples(foreman, "system:demo");
     // The demo is for looking around; the getting-started checklist is for a real install.
     foreman.store.setSetting("setup.hidden", true);
+    // Connections to look at: Jira, which works against the mock, and two command lines whose
+    // Test button shows whether the program is installed here.
+    const demoConnections: { preset: string; name: string; values: Record<string, string | boolean>; rules?: { allow: string[]; ask: string[]; deny: string[] } }[] = [
+        { preset: "jira", name: "Jira", values: { writes: true } },
+        { preset: "azure-cli", name: "Azure CLI", values: { ownSignIn: true } },
+        { preset: "custom-cli", name: "Git (read only)", values: { command: "git", testArgs: "--version" }, rules: { allow: ["git --version", "git status", "git log", "git diff", "git show"], ask: [], deny: ["git push", "git reset", "git clean"] } },
+    ];
+    for (const d of demoConnections) {
+        const preset = CONNECTION_PRESETS.find((p) => p.id === d.preset);
+        if (!preset) continue;
+        const built = preset.build(d.values);
+        foreman.connections.create(ConnectionInput.parse({ ...built, rules: d.rules ?? built.rules, name: d.name, kind: preset.kind, preset: preset.id }));
+    }
     // Approvals and questions go to the bot instead, whose cards can be answered in place.
     foreman.bot.configure({ enabled: true, mock: true });
     foreman.notify.configure({ agingMinutes: 2 });

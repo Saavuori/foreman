@@ -73,6 +73,8 @@ export const AgentSpec = z.object({
     /** Built-in runtime tools to enable. Empty means none (the runtime runs in `mode: "empty"`). */
     tools: z.array(z.string()).default([]),
     mcpServers: z.record(z.string(), McpServerSpec).default({}),
+    /** Connections (set up once under Connections) this agent may use: MCP servers, command-line tools, Jira. */
+    connections: z.array(z.string()).default([]),
     subAgents: z.array(SubAgentSpec).default([]),
     policy: z
         .object({

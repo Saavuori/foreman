@@ -1,7 +1,7 @@
 import { go, rpc, useRpc } from "../api.ts";
 import { useAction } from "../ui.tsx";
 
-const TOPICS = ["agents", "run", "work", "notify", "setup"];
+const TOPICS = ["agents", "run", "work", "notify", "setup", "connections"];
 
 interface Step {
     id: string;
