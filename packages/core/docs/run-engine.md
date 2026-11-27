@@ -120,16 +120,13 @@ Tools Foreman provides on every runtime, defined once in `FOREMAN_TOOLS`:
 | `ask_for_info` | internal | Asks a person and waits; always available |
 | `jira_get_issue`, `jira_search` | read | Switched on per agent |
 | `jira_add_comment`, `jira_transition`, `jira_create_subtask` | custom-tool | Switched on per agent; guardrails apply |
-| `knowledge_search`, `knowledge_read` | read | On when `spec.knowledge` lists any library node; limited to those branches. See [knowledge.md](knowledge.md) |
 
 `internal` tools skip the policy check because they only talk to Foreman. The others are
-enabled by listing the name in `spec.tools` — except tools with `group: "knowledge"`, which
-`toolEnabled(tool, spec)` turns on from `spec.knowledge` — and are authorised as `kind` +
-`toolName`, so a rule `jira_transition → ask` works.
+enabled by listing the name in `spec.tools`, and are authorised as `kind` + `toolName`, so a
+rule `jira_transition → ask` works.
 
 Adding a tool: append to `FOREMAN_TOOLS` with a zod `input`, a `summary(args)` for approvals and
-a `handler(ctx, args)` returning text. `ctx` gives `run`, `spec`, `emit`, `ask`, `jira()` and
-`knowledge()`. If it
+a `handler(ctx, args)` returning text. `ctx` gives `run`, `emit`, `ask` and `jira()`. If it
 needs something else, extend `ToolContext` and supply it in `Engine.execute` (the tool host is
 set with `engine.setToolHost` in `index.ts`). Throw to report failure. It then shows up in the
 agent studio, in `system.agent_tools`, in the mock runtime and in the Copilot adapter with no

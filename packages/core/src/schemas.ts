@@ -73,8 +73,6 @@ export const AgentSpec = z.object({
     /** Built-in runtime tools to enable. Empty means none (the runtime runs in `mode: "empty"`). */
     tools: z.array(z.string()).default([]),
     mcpServers: z.record(z.string(), McpServerSpec).default({}),
-    /** Knowledge library items (folders, pages, files) the agent may search; each covers everything beneath it. */
-    knowledge: z.array(z.string()).default([]),
     subAgents: z.array(SubAgentSpec).default([]),
     policy: z
         .object({

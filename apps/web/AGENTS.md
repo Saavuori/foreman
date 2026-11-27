@@ -23,7 +23,6 @@ first.
 | `src/pages/RunDetail.tsx` | One run |
 | `src/pages/Notifications.tsx` | Inbox, Teams preview, channels & rules, delivery log |
 | `src/pages/Secrets.tsx` | Secrets |
-| `src/pages/Knowledge.tsx` | Knowledge library tree, document detail, Confluence import picker, upload and note dialogs, search tester, search settings; exports `KnowledgePicker` for the studio |
 | `src/pages/Connect.tsx` | MCP connection details and the capability console |
 
 ## Data: one way in, one way out
@@ -37,8 +36,7 @@ await run(() => rpc("work.hold", { itemId, held: true }), "Held");     // write,
 - **`rpc(name, input)`** is the only way to talk to the server. Do not call `fetch` for app
   data. If what you need does not exist, add a capability in `packages/core` first.
 - **`useRpc(name, input, topics)`** fetches and refetches when the server publishes one of
-  `topics`: `run`, `run:<id>`, `approval`, `agents`, `triggers`, `audit`, `work`, `notify`,
-  `knowledge`.
+  `topics`: `run`, `run:<id>`, `approval`, `agents`, `triggers`, `audit`, `work`, `notify`.
   Pass `null` as the name to skip the call. It returns `{ data, error, loading, reload }`.
   Bursts of events collapse into one refetch.
 - **`useAction()`** runs a write, shows failures as a toast, returns `undefined` on failure and

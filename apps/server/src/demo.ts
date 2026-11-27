@@ -77,24 +77,21 @@ const modelBacked = (baseUrl: string): Omit<DemoAgent, "routes"> => ({
  * left unrouted so the inbox has something in it.
  */
 export function startDemo(foreman: Foreman): () => void {
-    const created = new Map<string, string>();
     for (const def of AGENTS) {
         const { agent } = foreman.store.createAgent({ name: def.name, description: def.description, spec: AgentSpec.parse(def.spec), note: "Demo agent", actor: "system:demo" });
-        created.set(def.name, agent.id);
         for (const route of def.routes) foreman.store.createRule({ name: route.name, match: route.match, agentId: agent.id, review: route.review ?? false, promptTemplate: DEFAULT_TICKET_PROMPT, enabled: true });
     }
     const reader = modelBacked(foreman.info.baseUrl);
-    created.set(reader.name, foreman.store.createAgent({ name: reader.name, description: reader.description, spec: AgentSpec.parse(reader.spec), note: "Demo agent", actor: "system:demo" }).agent.id);
+    foreman.store.createAgent({ name: reader.name, description: reader.description, spec: AgentSpec.parse(reader.spec), note: "Demo agent", actor: "system:demo" });
     const teams = foreman.notify.createChannel({ name: "Agents (Teams preview)", kind: "mock_teams" });
     // Approvals and questions go to the bot instead, whose cards can be answered in place.
-    foreman.notify.createRule({ name: "Everything else a person should see", events: ["batch_done", "jira_write_failed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "knowledge_sync_failed", "digest", "custom"], channelId: teams.id });
+    foreman.notify.createRule({ name: "Everything else a person should see", events: ["batch_done", "jira_write_failed", "ticket_failed", "ticket_review", "ticket_aging", "run_failed", "intake_failed", "digest", "custom"], channelId: teams.id });
     foreman.bot.configure({ enabled: true, mock: true });
     foreman.notify.configure({ agingMinutes: 2 });
     foreman.work.updateSettings({ enabled: true, pollSeconds: 30, wipPerAgent: 2, writeBack: { enabled: true, statusStarted: "In Progress", statusReview: "In Review", statusDone: "Done" } });
     foreman.mockJira.setGenerator(5);
     // New mock tickets announce themselves by webhook, so they appear at once rather than on the next poll.
     foreman.mockJira.webhookUrl = foreman.work.webhookUrl();
-    foreman.mockConfluence.webhookUrl = foreman.confluence.webhookUrl();
     void foreman.work.poll().catch(() => {});
     // One batch to watch: the documentation tickets, tracked as a single job. It is created a
     // moment after start because the mock Jira is served by this same process.
@@ -106,36 +103,9 @@ export function startDemo(foreman: Foreman): () => void {
         const channel = foreman.notify.createChannel({ name: "Approvals (Teams bot)", kind: "teams_bot", webhookUrl: installed.conversationId });
         foreman.notify.createRule({ name: "Decide in Teams", events: ["approval_needed", "question_asked"], channelId: channel.id });
     }, 1500);
-    // A knowledge library from the mock Confluence plus a note, given to two agents. Also over
-    // HTTP to this same server, so it waits a moment too.
-    const library = setTimeout(async () => {
-        const kb = foreman.knowledge;
-        const handbook = await foreman.confluence.import({ page: "1001", scope: "tree" }).catch(() => null);
-        const payments = await foreman.confluence.import({ spaceKey: "PAY", scope: "space" }).catch(() => null);
-        const notes = kb.createFolder("Team notes");
-        kb.addDocument({ parentId: notes.id, title: "Release checklist", source: { kind: "text", mediaType: "text/markdown" }, text: ` Release checklist
-
-## Before
-
-Announce the release in the team channel an hour ahead. Check the error budget: no release when less than 20% is left.
-
-## After
-
-Watch the dashboards for 15 minutes and close the release ticket with the version number.` });
-        const give = (agent: string, ids: (string | undefined)[]) => {
-            const agentId = created.get(agent);
-            const rev = agentId && foreman.store.getRevision(foreman.store.getAgent(agentId)!.activeRevisionId);
-            if (rev) foreman.store.addRevision(agentId, { ...rev.spec, knowledge: ids.filter((id): id is string => !!id) }, "Knowledge from the demo library", "system:demo", true);
-        };
-        give("Bug triage", [payments?.id]);
-        give("Release assistant", [handbook?.id, notes.id]);
-        give("Model-backed reader", [handbook?.id]);
-        foreman.bus.emit("change", "agents");
-    }, 1200);
     return () => {
         clearTimeout(batch);
         clearTimeout(install);
-        clearTimeout(library);
         foreman.mockJira.setGenerator(0);
     };
 }

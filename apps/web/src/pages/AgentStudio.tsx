@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentSpec, PolicyRule } from "@foreman/core";
 import { go, rpc, useRpc } from "../api.ts";
-import { KnowledgePicker } from "./Knowledge.tsx";
 import { Trace } from "../Trace.tsx";
 import { CopyButton, Empty, ErrorBanner, Field, Lamp, relTime, Segmented, useAction, useTick } from "../ui.tsx";
 import { RunRows } from "./Home.tsx";
@@ -305,7 +304,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                                 <span className="label">Foreman tools</span>
                                 <div className="row wrap" style={{ gap: 6 }}>
                                     {(ownTools.data ?? []).map((t) => (
-                                        <button key={t.name} type="button" className="chip" aria-pressed={t.alwaysOn || (t.withKnowledge ? spec.knowledge.length > 0 : spec.tools.includes(t.name))} disabled={t.alwaysOn || t.withKnowledge} title={`${t.description}${t.alwaysOn ? " Always available." : t.withKnowledge ? " On when the agent has knowledge (below)." : t.guarded ? " Changes a ticket, so the guardrails apply." : ""}`} onClick={() => toggleTool(t.name)}>
+                                        <button key={t.name} type="button" className="chip" aria-pressed={t.alwaysOn || spec.tools.includes(t.name)} disabled={t.alwaysOn} title={`${t.description}${t.alwaysOn ? " Always available." : t.guarded ? " Changes a ticket, so the guardrails apply." : ""}`} onClick={() => toggleTool(t.name)}>
                                             {t.name}
                                         </button>
                                     ))}
@@ -314,7 +313,6 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                                     Work on any runtime. Every agent can report progress and ask a person a question. The Jira tools act on the site set under Work → Routing &amp; intake; add a guardrail such as <code className="mono">jira_transition → ask</code> to keep a person in the loop.
                                 </span>
                             </div>
-                            <KnowledgePicker value={spec.knowledge ?? []} onChange={(knowledge) => set({ knowledge })} />
                             <JsonField label="MCP servers" rows={4} emptyAs={{}} value={Object.keys(spec.mcpServers).length ? spec.mcpServers : undefined} onChange={(mcpServers) => set({ mcpServers })} hint='Keyed by name, e.g. {"github": {"type": "http", "url": "https://…"}} or {"files": {"type": "stdio", "command": "npx", "args": ["…"]}}. Put {{secret:NAME}} where a key goes; the value comes from Secrets when the run starts.' />
                             <JsonField label="Sub-agents" rows={3} emptyAs={[]} value={spec.subAgents.length ? spec.subAgents : undefined} onChange={(subAgents) => set({ subAgents })} hint='Specialists this agent can delegate to, e.g. [{"name": "researcher", "description": "…", "prompt": "…", "tools": ["view"]}]' />
                         </section>

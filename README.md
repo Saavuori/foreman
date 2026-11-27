@@ -124,35 +124,6 @@ Every delivery is logged with its result; failures are retried twice.
 Jira can also call Foreman: give Jira the address under Work → Routing & intake → Instant pickup
 as a webhook, and new tickets are picked up at once instead of at the next check.
 
-## Knowledge
-
-The **Knowledge** page is a library agents can search, arranged as a tree of folders, pages and
-files:
-
-- **Confluence** (Data Center or Cloud) — import one page, a page with all its sub-pages, or a
-  whole space, picked from a browser of the site. Imports stay in step: Foreman checks for
-  changes on a schedule (hourly by default) or when asked, re-reads only pages whose version
-  changed, adds new ones and drops deleted ones. Removing a sub-page leaves it out of future
-  checks too, until it is put back. Give Confluence the webhook address under Knowledge → Search
-  settings → Instant updates, and a change is searchable within seconds. If checks start
-  failing, the inbox gets a "Confluence check failing" notice, which a rule can send to Teams.
-- **Files and notes** — upload Markdown, text, CSV/JSON/YAML or HTML, or write a note in Foreman.
-  PDF, Word, PowerPoint and pictures are planned, not built yet.
-
-Give an agent knowledge in its studio by ticking folders or pages; a ticked folder includes
-whatever is added to it later. The agent then gets two tools, `knowledge_search` and
-`knowledge_read`, that see only those branches. The page's search tester can search "as" an
-agent to show exactly what it would find.
-
-Search combines full-text (exact words, error codes, names) with meaning search from an
-embedding model — any OpenAI-compatible endpoint or Azure OpenAI, with its key in Secrets. With no
-model configured, a built-in embedder is used that matches word parts but does not understand
-meaning. Everything lives in the same SQLite file; there is no separate vector database.
-
-Agents see what the Confluence account used for import can see — page restrictions are not
-applied per person. Neither a real Confluence nor a real embedding provider has been tried yet;
-both are tested against built-in stand-ins.
-
 ## No Copilot subscription needed
 
 New agents use the **mock runtime**: scripted scenarios (clean success, stops for approval, tool
@@ -183,7 +154,7 @@ the server, the web UI and the Copilot adapter.
 
 | Path | What |
 |---|---|
-| `packages/core` | Domain model, capability registry, run engine, policy, triggers, mock runtime, knowledge base, SQLite store |
+| `packages/core` | Domain model, capability registry, run engine, policy, triggers, mock runtime, SQLite store |
 | `packages/runtime-copilot` | Copilot SDK adapter |
 | `apps/server` | HTTP API, live stream, webhooks, MCP server, demo mode |
 | `apps/web` | React UI |

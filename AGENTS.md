@@ -14,22 +14,18 @@ Read this file first, then the guide for the part you are changing:
 | Work queue, routing, Jira, batches, flow metrics | [packages/core/docs/work-queue.md](packages/core/docs/work-queue.md) |
 | Notifications, Teams cards, the Teams bot | [packages/core/docs/notifications.md](packages/core/docs/notifications.md) |
 | Secrets vault, redaction | [packages/core/docs/secrets.md](packages/core/docs/secrets.md) |
-| Knowledge base, Confluence import, search, embeddings | [packages/core/docs/knowledge.md](packages/core/docs/knowledge.md) |
 | The Copilot SDK adapter | [packages/runtime-copilot/AGENTS.md](packages/runtime-copilot/AGENTS.md) |
 | HTTP server, MCP endpoint, mock Jira/Teams routes, demo mode | [apps/server/AGENTS.md](apps/server/AGENTS.md) |
 | The web UI | [apps/web/AGENTS.md](apps/web/AGENTS.md) |
 
-`README.md` is the user-facing description. `PLAN.md`, `PLAN-2-work-queue.md` and
-`PLAN-3-knowledge.md` are the design and build order; all of plan 2 (slices A–F) is built, and
-slices A and B of plan 3 (library, search, Confluence) are built — C (PDF, Word, images) and D
-(search quality measurement) are not.
+`README.md` is the user-facing description. `PLAN.md` and `PLAN-2-work-queue.md` are the
+design and build order; all of plan 2 (slices A–F) is built.
 
 ## Layout
 
 ```
 packages/core             Everything that is not transport or pixels: store, engine, policy,
-                          work queue, Jira client + mock, notifications, vault, knowledge base,
-                          Confluence client + mock, capabilities
+                          work queue, Jira client + mock, notifications, vault, capabilities
 packages/runtime-copilot  Adapter that runs agents on the GitHub Copilot SDK
 apps/server               Fastify: /api/rpc, /api/stream (SSE), /mcp, /hooks, /mock/*, static UI
 apps/web                  React 19 + Vite UI, hand-written CSS
@@ -136,11 +132,6 @@ real service.
   tried. The simulated runtime is the default.
 - **Real Jira.** Sign-in, search, comments, transitions, subtasks and the webhook are tested only
   against the built-in mock.
-- **Real Confluence.** Import, sync, exclusions, the page picker and the webhook are tested only
-  against the built-in mock (Data Center and Cloud paths alike).
-- **Real embedding providers.** The OpenAI-compatible and Azure OpenAI embedders are tested
-  only against the mock endpoint `/mock/model/v1/embeddings`. The default built-in embedder
-  matches word parts, not meaning.
 - **Real Teams.** Workflows-webhook cards and the Teams bot (token checks, sending, updating,
   button presses) follow Microsoft's documented formats and are tested over HTTP against the
   mock Bot Framework only. No Entra app registration has been used.

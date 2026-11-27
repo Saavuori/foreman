@@ -11,8 +11,6 @@ import type { WorkHub } from "./work.ts";
 import type { Vault } from "./vault.ts";
 import type { BatchHub } from "./batches.ts";
 import type { MockBotFramework, TeamsBot } from "./teamsbot.ts";
-import type { KnowledgeHub } from "./knowledge.ts";
-import type { ConfluenceSync, MockConfluence } from "./confluence.ts";
 
 /** Who is calling. Every capability call is attributed and audited. */
 export interface Actor {
@@ -27,11 +25,11 @@ export interface BusEvents {
     event: [event: RunEvent];
     approval: [approval: Approval];
     /** Coarse "something in this collection changed" signal for live UIs. */
-    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify" | "knowledge"];
+    change: [entity: "agents" | "triggers" | "audit" | "work" | "notify"];
     /** A work item changed state. */
     work: [item: WorkItem, previous: WorkState];
     /** Something a person should hear about that has no run or ticket behind it. */
-    notice: [notice: { kind: "intake_failed" | "jira_write_failed" | "knowledge_sync_failed" | "custom"; severity: "info" | "success" | "warning" | "error"; title: string; text: string; path: string; dedupeKey: string }];
+    notice: [notice: { kind: "intake_failed" | "jira_write_failed" | "custom"; severity: "info" | "success" | "warning" | "error"; title: string; text: string; path: string; dedupeKey: string }];
 }
 export class Bus extends EventEmitter<BusEvents> {
     constructor() {
@@ -52,9 +50,6 @@ export interface Services {
     batches: BatchHub;
     bot: TeamsBot;
     mockBot: MockBotFramework;
-    knowledge: KnowledgeHub;
-    confluence: ConfluenceSync;
-    mockConfluence: MockConfluence;
     runtimes: Record<string, RuntimeAdapter>;
     registry: Registry;
     info: { version: string; dataDir: string; baseUrl: string; startedAt: string };

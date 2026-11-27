@@ -5,14 +5,8 @@ import type { AuthorizeRequest, RuntimeAdapter } from "./runtime.ts";
 import { TERMINAL_STATUSES, type Approval, type Run, type RunUsage } from "./schemas.ts";
 import type { Store } from "./store.ts";
 import type { JiraClient } from "./jira.ts";
-import type { KnowledgeHub } from "./knowledge.ts";
 import { FOREMAN_TOOLS, foremanTool, toolEnabled, toolInfo } from "./tools.ts";
 import { z } from "zod";
-
-interface ToolHost {
-    jira(): JiraClient;
-    knowledge(): KnowledgeHub;
-}
 
 export interface EngineOptions {
     concurrency: number;
@@ -44,9 +38,9 @@ export class Engine {
         private opts: EngineOptions = { concurrency: 4 },
     ) {}
 
-    private toolHost?: ToolHost;
+    private toolHost?: { jira(): JiraClient };
     /** What Foreman's own agent tools act on. Set once the work queue exists. */
-    setToolHost(host: ToolHost) {
+    setToolHost(host: { jira(): JiraClient }) {
         this.toolHost = host;
     }
 
@@ -179,11 +173,11 @@ export class Engine {
             return verdict.allowed ? verdict.reason : null;
         };
         const tools = {
-            available: FOREMAN_TOOLS.filter((t) => toolEnabled(t, spec)).map(toolInfo),
+            available: FOREMAN_TOOLS.filter((t) => toolEnabled(t, spec.tools)).map(toolInfo),
             call: async (name: string, args: unknown): Promise<{ ok: boolean; content: string }> => {
                 const tool = foremanTool(name);
                 if (!tool) return { ok: false, content: `Unknown tool "${name}"` };
-                if (!toolEnabled(tool, spec)) return { ok: false, content: `${name} is not switched on for this agent` };
+                if (!toolEnabled(tool, spec.tools)) return { ok: false, content: `${name} is not switched on for this agent` };
                 const parsed = tool.input.safeParse(args ?? {});
                 if (!parsed.success) return { ok: false, content: `Invalid arguments for ${name}: ${z.prettifyError(parsed.error)}` };
                 if (tool.kind !== "internal") {
@@ -192,7 +186,7 @@ export class Engine {
                 }
                 if (!this.toolHost) return { ok: false, content: "Foreman tools are not available on this server" };
                 try {
-                    return { ok: true, content: await tool.handler({ run, spec, emit, ask, jira: () => this.toolHost!.jira(), knowledge: () => this.toolHost!.knowledge() }, parsed.data) };
+                    return { ok: true, content: await tool.handler({ run, emit, ask, jira: () => this.toolHost!.jira() }, parsed.data) };
                 } catch (e) {
                     return { ok: false, content: e instanceof Error ? e.message : String(e) };
                 }

@@ -22,8 +22,7 @@ Typical flows:
 - Debug: runs_list (status failed) → runs_explain_failure → runs_timeline → agents_update → runs_replay.
 - Tune: insights_summary and insights_tool_usage → agents_update with activate=false → runs_start with revisionId → revisions_activate.
 Agents default to autonomy "propose": writes wait in approvals_list until approvals_decide. New agents use runtime "simulated" (a mock that calls no model); set spec.runtime to "copilot" for real runs, either with Copilot access or with spec.provider naming a model endpoint and a stored key (secrets_set) — then spec.model must be the provider's model id, not "auto".
-- Teams: teamsbot_status → teamsbot_configure → channels_create kind "teams_bot" → notifyrules_create, so approvals and questions can be decided from a Teams card.
-- Knowledge: confluence_status → confluence_browse → knowledge_import_confluence (a page, a page with its sub-pages, or a space) or knowledge_upload / knowledge_add_text → knowledge_tree → knowledge_assign an agent the folders or pages it may use → knowledge_search with agentId to see what that agent would find.`;
+- Teams: teamsbot_status → teamsbot_configure → channels_create kind "teams_bot" → notifyrules_create, so approvals and questions can be decided from a Teams card.`;
 
 const PROMPTS = [
     {

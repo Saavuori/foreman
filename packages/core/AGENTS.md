@@ -26,9 +26,6 @@ here; `apps/server` and `apps/web` are thin layers over this package. Read the r
 | `notify.ts` | Notification hub, channels, rules, Adaptive Cards, mock Teams | [notifications.md](docs/notifications.md) |
 | `teamsbot.ts` | Teams bot (Bot Framework protocol, token checks, card buttons) and the mock Bot Framework | [notifications.md](docs/notifications.md) |
 | `vault.ts` | Encrypted secrets, sealing, scrubbing | [secrets.md](docs/secrets.md) |
-| `knowledge.ts` | Knowledge library tree, passages, full-text index, embeddings, hybrid search | [knowledge.md](docs/knowledge.md) |
-| `extract.ts` | HTML / Confluence storage format / Markdown to text, passages, built-in embedder | [knowledge.md](docs/knowledge.md) |
-| `confluence.ts` | `ConfluenceClient`, `ConfluenceSync` (import, sync, exclusions) and `MockConfluence` | [knowledge.md](docs/knowledge.md) |
 | `index.ts` | `createForeman(options)`: builds and wires everything; the package's exports | below |
 | `core.test.ts` | Unit-level tests through the registry | below |
 
@@ -37,12 +34,9 @@ here; `apps/server` and `apps/web` are thin layers over this package. Read the r
 `createForeman` in `index.ts` is the only place objects are constructed. Order matters:
 
 ```
-Store → Bus → runtimes → Vault → Engine → TriggerHub → MockJira → WorkHub → KnowledgeHub
-      → MockConfluence → ConfluenceSync → NotifyHub → MockBotFramework → TeamsBot
-      (notify.setBot) → BatchHub → Registry → bot.setDecider
+Store → Bus → runtimes → Vault → Engine → TriggerHub → MockJira → WorkHub → NotifyHub
+      → MockBotFramework → TeamsBot (notify.setBot) → BatchHub → Registry → bot.setDecider
 ```
-
-The engine reaches Jira and the knowledge library for agent tools through `engine.setToolHost`.
 
 Two late bindings break what would be cycles: the bot stores its mock messages in the hub's
 `MockTeams`, so `NotifyHub` gets the bot with `setBot`; and the bot decides approvals through
@@ -56,7 +50,7 @@ Hubs do not call each other's internals; they talk through the **Bus** (`registr
 | `event` | Engine | One trace event was appended |
 | `approval` | Engine | An approval or question was created or decided |
 | `work` | WorkHub | A work item changed state (`item`, `previous`) |
-| `notice` | WorkHub, ConfluenceSync | Something to tell a person that has no run or ticket behind it |
+| `notice` | WorkHub | Something to tell a person that has no run or ticket behind it |
 | `change` | anyone | "This collection changed" — drives live refresh in the UI |
 
 Adding a new hub: construct it in `createForeman`, add it to `Services` in `registry.ts` (so
@@ -68,7 +62,7 @@ new kind of `change`, add the entity name to `BusEvents["change"]` **and** to th
 
 - One SQLite file, `<dataDir>/foreman.db`, or `:memory:` when `memory: true` (tests, demo).
 - Core tables are created by the `SCHEMA` string in `store.ts`. Hubs that own their own tables
-  (`notify.ts`, `vault.ts`, `batches.ts`, `knowledge.ts`) create them in their constructor with
+  (`notify.ts`, `vault.ts`, `batches.ts`) create them in their constructor with
   `store.db.exec(SCHEMA)` and query through `store.db` directly.
 - There is **no migration system**. Every statement is `CREATE TABLE IF NOT EXISTS`. Adding a
   column to an existing table needs an explicit `ALTER TABLE … ADD COLUMN` guarded so it runs

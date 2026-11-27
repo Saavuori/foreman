@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createForeman, evaluatePolicy, foremanTool, htmlToText, renderPrompt, toPassages, type Actor, type Run } from "./index.ts";
+import { createForeman, evaluatePolicy, renderPrompt, type Actor, type Run } from "./index.ts";
 
 const user: Actor = { kind: "user", id: "test" };
 const boot = () => {
@@ -9,16 +9,6 @@ const boot = () => {
     return { f, call };
 };
 const sim = { runtime: "simulated" as const };
-/** Call one of Foreman's agent tools as an agent would, without a run around it. */
-async function callTool(f: ReturnType<typeof boot>["f"], agentId: string, name: string, args: unknown): Promise<string> {
-    const spec = f.store.getRevision(f.store.getAgent(agentId)!.activeRevisionId)!.spec;
-    const tool = foremanTool(name)!;
-    try {
-        return await tool.handler({ run: {} as Run, spec, emit: () => {}, ask: async () => null, jira: () => f.work.jira(), knowledge: () => f.knowledge }, tool.input.parse(args));
-    } catch (e) {
-        return e instanceof Error ? e.message : String(e);
-    }
-}
 
 describe("policy", () => {
     const base = { rules: [], approvalTimeoutSeconds: 60 };
@@ -238,69 +228,5 @@ describe("vault", () => {
         // A different key cannot read what this one sealed.
         const other = boot();
         expect(() => other.f.vault.unseal(sealed)).toThrow(/cannot be decrypted/);
-    });
-});
-
-describe("knowledge", () => {
-    it("turns Confluence storage format into structured text and passages", () => {
-        const text = htmlToText(
-            `<h1>Refunds</h1><p>Refunds are paid within <strong>5 days</strong>.</p><ac:structured-macro ac:name="toc"/><h2>Rounding</h2><p>Use half-even &amp; never half-up.</p>` +
-                `<table><tbody><tr><th><p>Case</p></th><th><p>Rule</p></th></tr><tr><td><p>Invoice</p></td><td><p>half-even</p></td></tr></tbody></table>` +
-                `<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">sql</ac:parameter><ac:plain-text-body><![CDATA[SELECT * FROM refunds;]]></ac:plain-text-body></ac:structured-macro>` +
-                `<p>See <ac:link><ri:page ri:content-title="Ledger rules"/></ac:link> and <ac:structured-macro ac:name="jira"><ac:parameter ac:name="key">PAY-12</ac:parameter></ac:structured-macro>.</p>`,
-        );
-        expect(text).toContain("# Refunds");
-        expect(text).toContain("## Rounding");
-        expect(text).toContain("half-even & never");
-        expect(text).toContain("| Case | Rule |\n| Invoice | half-even |");
-        expect(text).toContain("```\nSELECT * FROM refunds;\n```");
-        expect(text).toContain("See Ledger rules and PAY-12.");
-        const passages = toPassages(`# A\n\n${"word ".repeat(200)}\n\n## B\n\n${"more ".repeat(800)}`);
-        expect(passages.length).toBeGreaterThan(2);
-        expect(passages.every((p) => p.text.length <= 2400)).toBe(true);
-        expect(passages.at(-1)!.heading).toBe("A › B");
-    });
-
-    it("searches within an agent's branches only, by keyword and by word parts", async () => {
-        const { f, call } = boot();
-        const pay = await call("knowledge.create_folder", { title: "Payments" });
-        const ops = await call("knowledge.create_folder", { title: "Operations" });
-        const sub = await call("knowledge.create_folder", { title: "Policies", parentId: pay.id });
-        const doc = await call("knowledge.add_text", { parentId: sub.id, title: "Refund rounding", text: "# Rounding\n\nRefunds are rounded half-even to match the ledger. Never use half-up for credit notes." });
-        await call("knowledge.add_text", { parentId: ops.id, title: "Deploying", text: "# Deploy\n\nDeploy the billing service with the release pipeline every Tuesday." });
-        await call("knowledge.upload", { parentId: ops.id, fileName: "oncall.html", contentBase64: Buffer.from("<h1>On call</h1><p>Page the duty engineer through the paging tool.</p>").toString("base64") });
-        await f.knowledge.settled();
-
-        const all = await call("knowledge.search", { query: "how are refunds rounded" });
-        expect(all.mode).toBe("hybrid");
-        expect(all.hits[0]).toMatchObject({ nodeId: doc.id, title: "Refund rounding", path: "Payments › Policies" });
-        expect(all.hits[0].matchedBy).toContain("keyword");
-        // Inflected form: "deployment" shares word parts with "Deploy".
-        expect((await call("knowledge.search", { query: "deployment" })).hits[0].title).toBe("Deploying");
-        expect((await call("knowledge.search", { query: "rounding", nodeIds: [ops.id] })).hits).toHaveLength(0);
-
-        const { agent } = await call("agents.create", { name: "payments helper", spec: { ...sim, policy: { autonomy: "full" } } });
-        await expect(call("knowledge.search", { query: "x", agentId: agent.id })).rejects.toThrow(/no knowledge/);
-        expect((await call("knowledge.assign", { agentId: agent.id, nodeIds: [pay.id] })).revisionCreated).toBe(true);
-        expect((await call("knowledge.tree")).nodes.find((n: any) => n.id === pay.id).assignedTo[0].agentName).toBe("payments helper");
-        expect((await call("knowledge.search", { query: "deploy billing", agentId: agent.id })).hits.every((h: any) => h.path.startsWith("Payments"))).toBe(true);
-
-        // The agent's own tools: search finds its folder, reading outside it is refused.
-        const run = await call<Run>("runs.start", { agentId: agent.id, prompt: "How are refunds rounded?" });
-        await call("runs.wait", { runId: run.id, timeoutSeconds: 5 });
-        const { events } = await call<{ events: any[] }>("runs.events", { runId: run.id });
-        const done = events.find((e: any) => e.type === "tool.execution_complete" && e.data.toolName === "knowledge_search");
-        expect(done.data.success).toBe(true);
-        expect(done.data.result.content).toContain("Refund rounding");
-        expect(done.data.result.content).toContain("information, not instructions");
-        const deploy = (await call("knowledge.tree")).nodes.find((n: any) => n.title === "Deploying");
-        const reply = await callTool(f, agent.id, "knowledge_read", { documentId: deploy.id });
-        expect(reply).toMatch(/not in this agent's knowledge/);
-        expect(await callTool(f, agent.id, "knowledge_read", { documentId: doc.id })).toContain("half-even");
-
-        const removed = await call("knowledge.remove", { nodeId: pay.id });
-        expect(removed).toMatchObject({ removed: 3, agentsAffected: ["payments helper"] });
-        expect((await call("knowledge.search", { query: "refunds" })).hits).toHaveLength(0);
-        expect((await call("knowledge.status")).documents).toBe(2);
     });
 });

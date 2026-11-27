@@ -48,15 +48,12 @@ export const MOCK_SCENARIOS: MockScenario[] = [
         script: ({ run, spec }) => {
             const tools = [...spec.tools.map((tool) => ({ tool, kind: permissionKindForTool(tool) })), ...Object.keys(spec.mcpServers).map((s) => ({ tool: `${s}-call`, kind: "mcp" }))].slice(0, 4);
             const toolError = /\[tool-error\]/.test(run.prompt);
-            // An agent with knowledge looks things up first, for real, within its own branches.
-            const lookup: MockStep[] = spec.knowledge.length ? [{ do: "tool", tool: "knowledge_search", args: { query: subject(run), limit: 4 } }] : [];
             return [
                 { do: "think", intent: "Working out which tools the task needs" },
-                ...lookup,
                 ...tools.map((t): MockStep => ({ do: "tool", ...t, args: { input: run.prompt.slice(0, 80) }, result: `Simulated result from ${t.tool}`, fail: toolError ? "Simulated tool failure (prompt contained [tool-error])" : undefined })),
                 usage(400 + run.prompt.length + spec.instructions.length, 120 + tools.length * 40, 1 + tools.length * 0.5),
                 ...(/\[fail\]/.test(run.prompt) ? [{ do: "fail", error: "Simulated failure (prompt contained [fail])" } as MockStep] : []),
-                { do: "say", content: `Simulated run complete. ${tools.length || lookup.length ? `Used ${[...(lookup.length ? ["knowledge_search"] : []), ...tools.map((t) => t.tool)].join(", ")}.` : "No tools were needed."}` },
+                { do: "say", content: `Simulated run complete. ${tools.length ? `Used ${tools.map((t) => t.tool).join(", ")}.` : "No tools were needed."}` },
             ];
         },
     },
@@ -399,9 +396,6 @@ export function mockModelReply(body: any): { message: Record<string, unknown>; f
             if (key && /key$/i.test(name)) args[name] = key;
             else if (name === "total") args[name] = 1;
             else if (name === "jql") args[name] = "status != Done";
-            else if (name === "query") args[name] = text.split("\n")[0]!.slice(0, 200) || "how do we do this";
-            else if (name === "documentId") args[name] = /\bkb_[a-z0-9]{12}\b/.exec(messages.filter((m) => m.role === "tool").map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n"))?.[0] ?? "kb_unknown";
-            else if (name === "part") args[name] = 1;
         }
         return { message: { role: "assistant", content: null, tool_calls: [{ id: `call_${called.size + 1}`, type: "function", function: { name: next.name, arguments: JSON.stringify(args) } }] }, finish: "tool_calls" };
     }
